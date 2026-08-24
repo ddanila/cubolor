@@ -6,6 +6,8 @@ typedef unsigned short u16;
 typedef unsigned long u32;
 
 #define BOARD_SIZE 3
+#define FIELD_SIZE 5
+#define INNER_OFFSET 1
 #define CELL_COUNT 9
 #define LEVEL_COUNT 6
 #define UNDO_COUNT 64
@@ -47,6 +49,7 @@ struct Snapshot {
     CubeFaces cube;
     u8 paint[CELL_COUNT];
     u16 moves;
+    bool border_active;
 };
 
 struct GameState {
@@ -57,6 +60,7 @@ struct GameState {
     u8 paint[CELL_COUNT];
     u8 target[CELL_COUNT];
     u16 moves;
+    bool border_active;
     Snapshot undo[UNDO_COUNT];
     u8 undo_head;
     u8 undo_size;
@@ -70,6 +74,7 @@ bool game_move(GameState *game, WorldDirection direction);
 bool game_move_screen(GameState *game, ScreenDirection direction);
 bool game_undo(GameState *game);
 bool game_matches_target(const GameState *game);
+bool game_is_inner(unsigned x, unsigned y);
 const char *game_level_name(unsigned level);
 
 #endif

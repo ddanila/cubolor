@@ -8,7 +8,8 @@
 enum MotionKind {
     MOTION_NONE = 0,
     MOTION_ROLL = 1,
-    MOTION_TURN = 2
+    MOTION_TURN = 2,
+    MOTION_DROP = 3
 };
 
 struct Motion {
@@ -17,6 +18,7 @@ struct Motion {
     signed char turn_delta;
     u8 view_from;
     u8 from_x, from_y;
+    u8 drop_after_roll;
     CubeFaces cube_before;
 };
 

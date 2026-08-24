@@ -17,7 +17,8 @@ repeatable. The executable also remains compatible with 386-class CPUs; slower
 
 ## Gate
 
-`CUBOLOR.EXE -benchmark` renders 200 animated, rotating-board frames. It turns
+`CUBOLOR.EXE -benchmark` renders 200 animated frames of the complete 5×5 field
+and its rotating outer ring. It turns
 off vertical synchronization, measures elapsed PIT channel 2 ticks at
 1,193,182 Hz, and reports both total throughput and stage counters. The shell
 gate rejects missing/zero counters and throughput below 50.0 FPS.
@@ -32,8 +33,8 @@ Recorded on 2026-08-24 with the pinned Open Watcom 2026-08-01 build and
 DOSBox-X 2025.02.01:
 
 ```text
-486DX-50 performance: PASS (59.6 fps at 10000 cycles; minimum 50.0)
-Profile ticks: clear=419833 board=2626167 cube=801392 hud=143676 present=1806
+486DX-50 performance: PASS (57.8 fps at 10000 cycles; minimum 50.0)
+Profile ticks: clear=520375 board=2915727 cube=533982 hud=143718 present=1810
 ```
 
 ## Hot-path safeguards

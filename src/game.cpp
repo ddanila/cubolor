@@ -11,12 +11,12 @@ struct LevelDefinition {
 /* Targets are generated from known legal walks. Keeping the authoring format as
  * walks makes every shipped puzzle provably reachable from its initial cube. */
 static const LevelDefinition levels[LEVEL_COUNT] = {
-    {"FIRST LIGHT", 0, 0, "EESWWSEE"},
-    {"RIBBON",      2, 2, "WWNEENWW"},
-    {"TURNABOUT",   0, 2, "NEESWWNEES"},
-    {"SPECTRUM",    1, 1, "NWSSEENN"},
-    {"CROSSOVER",   1, 0, "WSSEENWEN"},
-    {"CUBOLOR",     2, 1, "WNESWWSEENW"}
+    {"FIRST LIGHT", 0, 1, "EEESWWSEE"},
+    {"RIBBON",      4, 3, "WWWNEENWW"},
+    {"TURNABOUT",   0, 3, "ENNEESWSE"},
+    {"SPECTRUM",    2, 0, "SWSSEENNWS"},
+    {"CROSSOVER",   1, 4, "NNNEESWESWW"},
+    {"CUBOLOR",     4, 2, "WNWWSSEENW"}
 };
 
 static CubeFaces initial_cube(void)
@@ -60,16 +60,22 @@ static bool step(unsigned *x, unsigned *y, WorldDirection direction)
         if (*y == 0) return false;
         --*y;
     } else if (direction == WORLD_EAST) {
-        if (*x + 1 >= BOARD_SIZE) return false;
+        if (*x + 1 >= FIELD_SIZE) return false;
         ++*x;
     } else if (direction == WORLD_SOUTH) {
-        if (*y + 1 >= BOARD_SIZE) return false;
+        if (*y + 1 >= FIELD_SIZE) return false;
         ++*y;
     } else {
         if (*x == 0) return false;
         --*x;
     }
     return true;
+}
+
+bool game_is_inner(unsigned x, unsigned y)
+{
+    return x >= INNER_OFFSET && x < INNER_OFFSET + BOARD_SIZE &&
+           y >= INNER_OFFSET && y < INNER_OFFSET + BOARD_SIZE;
 }
 
 static WorldDirection letter_direction(char letter)
@@ -95,23 +101,28 @@ void game_start(GameState *game, unsigned level)
     game->x = definition->start_x;
     game->y = definition->start_y;
     game->cube = initial_cube();
+    game->border_active = true;
 
     memset(&author, 0, sizeof(author));
     author.x = definition->start_x;
     author.y = definition->start_y;
     author.cube = initial_cube();
-    author.paint[author.y * BOARD_SIZE + author.x] = author.cube.bottom;
+    author.border_active = true;
     for (walk = definition->solution; *walk; ++walk) {
         WorldDirection direction = letter_direction(*walk);
         unsigned x = author.x, y = author.y;
         if (step(&x, &y, direction)) {
+            bool inner = game_is_inner(x,y);
+            if (!author.border_active && !inner) continue;
             roll(&author.cube, direction);
             author.x = (u8)x; author.y = (u8)y;
-            author.paint[y * BOARD_SIZE + x] = author.cube.bottom;
+            if (inner) {
+                author.border_active = false;
+                author.paint[(y-INNER_OFFSET)*BOARD_SIZE+(x-INNER_OFFSET)] = author.cube.bottom;
+            }
         }
     }
     memcpy(game->target, author.paint, sizeof(game->target));
-    game->paint[game->y * BOARD_SIZE + game->x] = game->cube.bottom;
     game->solved = game_matches_target(game);
 }
 
@@ -125,27 +136,35 @@ WorldDirection game_screen_to_world(unsigned screen_direction, unsigned view)
 bool game_can_move(const GameState *game, WorldDirection direction)
 {
     unsigned x = game->x, y = game->y;
-    return step(&x, &y, direction);
+    if (!step(&x, &y, direction)) return false;
+    return game->border_active || game_is_inner(x,y);
 }
 
 bool game_move(GameState *game, WorldDirection direction)
 {
     unsigned x = game->x, y = game->y;
     Snapshot *snapshot;
+    bool inner;
     if (!step(&x, &y, direction) || game->solved) return false;
+    inner=game_is_inner(x,y);
+    if (!game->border_active && !inner) return false;
 
     snapshot = &game->undo[game->undo_head];
     snapshot->x = game->x; snapshot->y = game->y;
     snapshot->cube = game->cube;
     memcpy(snapshot->paint, game->paint, sizeof(game->paint));
     snapshot->moves = game->moves;
+    snapshot->border_active = game->border_active;
     game->undo_head = (u8)((game->undo_head + 1) % UNDO_COUNT);
     if (game->undo_size < UNDO_COUNT) ++game->undo_size;
 
     roll(&game->cube, direction);
     game->x = (u8)x; game->y = (u8)y;
-    game->paint[y * BOARD_SIZE + x] = game->cube.bottom;
-    ++game->moves;
+    if (inner) {
+        game->border_active = false;
+        game->paint[(y-INNER_OFFSET)*BOARD_SIZE+(x-INNER_OFFSET)] = game->cube.bottom;
+        ++game->moves;
+    }
     game->solved = game_matches_target(game);
     return true;
 }
@@ -165,6 +184,7 @@ bool game_undo(GameState *game)
     game->cube = snapshot->cube;
     memcpy(game->paint, snapshot->paint, sizeof(game->paint));
     game->moves = snapshot->moves;
+    game->border_active = snapshot->border_active;
     --game->undo_size;
     game->solved = false;
     return true;

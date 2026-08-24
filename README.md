@@ -1,8 +1,10 @@
 # Cubolor
 
-Cubolor is a tiny isometric cube-rolling puzzle for MS-DOS. Roll a six-colored
-cube over a 3×3 floor: every square takes the color of the cube face touching
-it. Reproduce the target picture shown at the top right to finish the level.
+Cubolor is a tiny isometric cube-rolling puzzle for MS-DOS. The cube begins on
+the unpaintable outer ring of a 5×5 field. Roll around that ring freely to choose
+an orientation, then enter the inner 3×3 canvas: every canvas square takes the
+color of the cube face touching it. On entry, the ring drops away and cannot be
+re-entered. Reproduce the target picture shown at the top right to finish.
 
 The game is a 16-bit real-mode executable for a 386 or newer PC with EGA. It
 renders directly into high-resolution planar 640×350×16 mode `10h` video memory
@@ -20,7 +22,9 @@ flicker-free page pair. There are no runtime data files.
 
 Movement stays camera-relative after a view rotation. Both cube rolls and view
 turns animate over ten 50 Hz frames instead of jumping between states. The MVP
-contains six hand-authored, provably reachable 3×3 target pictures.
+contains six hand-authored, provably reachable 3×3 target pictures. Border
+movement neither paints nor increases the move counter. Undoing across the
+first inward roll restores the ring.
 
 ## Build and test
 
@@ -49,7 +53,7 @@ hosts are supported. `make dist` creates a ready-to-copy DOS directory.
 Gameplay is paced at 50 Hz by a restored-on-exit PIT interrupt. The benchmark
 disables vertical synchronization and profiles clear, board, cube, HUD, and
 page-flip stages separately. On the development profile, the MVP renders at
-59.6 raw FPS; see [performance.md](docs/performance.md) for the method and
+57.8 raw FPS; see [performance.md](docs/performance.md) for the method and
 latest recorded figures.
 
 Command-line diagnostics are `-selftest`, `-benchmark`, and `-capture`.

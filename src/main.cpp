@@ -16,7 +16,13 @@ static int selftest(void)
     game_start(&game,0);
     if(!video_init()) { puts("CUBOLOR SELFTEST FAIL MODE"); return 1; }
     video_render_game(&game,&motion); video_present();
-    checksum=video_page_checksum(); video_shutdown();
+    checksum=video_page_checksum();
+    game_move(&game,WORLD_EAST);
+    motion.kind=MOTION_DROP; motion.step=6;
+    video_render_game(&game,&motion); video_present();
+    checksum^=video_page_checksum();
+    motion=no_motion(); video_render_game(&game,&motion); video_present();
+    checksum^=video_page_checksum(); video_shutdown();
     if(checksum==0) { puts("CUBOLOR SELFTEST FAIL"); return 1; }
     printf("CUBOLOR SELFTEST PASS CRC=%08lX\n",checksum);
     return 0;
@@ -58,10 +64,12 @@ static int capture(void)
 static void begin_roll(GameState *game,Motion *motion,ScreenDirection direction)
 {
     WorldDirection world=game_screen_to_world(direction,game->view);
+    bool border_was_active=game->border_active;
     if(!game_can_move(game,world)) return;
     motion->kind=MOTION_ROLL; motion->step=0;
     motion->from_x=game->x; motion->from_y=game->y; motion->cube_before=game->cube;
     game_move(game,world);
+    motion->drop_after_roll=(u8)(border_was_active && !game->border_active);
 }
 
 int main(int argc,char **argv)
@@ -89,7 +97,11 @@ int main(int argc,char **argv)
             if(key_pressed(KEY_ESCAPE)) running=false;
         } else {
             if(motion.kind!=MOTION_NONE) {
-                if(++motion.step>=MOTION_STEPS) motion=no_motion();
+                if(++motion.step>=MOTION_STEPS) {
+                    if(motion.kind==MOTION_ROLL && motion.drop_after_roll) {
+                        motion.kind=MOTION_DROP; motion.step=0; motion.drop_after_roll=0;
+                    } else motion=no_motion();
+                }
             } else {
                 if(key_pressed(KEY_NUM_4)) begin_roll(&game,&motion,SCREEN_LEFT);
                 else if(key_pressed(KEY_NUM_8)) begin_roll(&game,&motion,SCREEN_UP);

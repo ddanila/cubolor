@@ -210,8 +210,8 @@ static int angle_for(const GameState *game, const Motion *motion)
 static Point project_half(int hx, int hy, int angle, int center_x, int center_y)
 {
     Point point;
-    point.x = center_x + ((long)cos_table[angle]*hx-(long)sin_table[angle]*hy)*48/256;
-    point.y = center_y + ((long)sin_table[angle]*hx+(long)cos_table[angle]*hy)*18/256;
+    point.x = center_x + ((long)cos_table[angle]*hx-(long)sin_table[angle]*hy)*30/256;
+    point.y = center_y + ((long)sin_table[angle]*hx+(long)cos_table[angle]*hy)*12/256;
     return point;
 }
 
@@ -247,6 +247,29 @@ static void draw_cell(unsigned x, unsigned y, u8 paint, int angle)
     quad(p[0],p[1],p[2],p[3],fill);
 }
 
+static Point field_vertex(unsigned x,unsigned y,int angle)
+{
+    return project_half((int)x*2-5,(int)y*2-5,angle,300,186);
+}
+
+static void draw_ring_part(Point a,Point b,Point c,Point d,int offset)
+{
+    a.y+=offset;b.y+=offset;c.y+=offset;d.y+=offset;
+    quad(a,b,c,d,7);
+}
+
+static void draw_outer_ring(int angle,unsigned drop_step)
+{
+    draw_ring_part(field_vertex(0,0,angle),field_vertex(5,0,angle),
+                   field_vertex(4,1,angle),field_vertex(1,1,angle),drop_step*3);
+    draw_ring_part(field_vertex(5,0,angle),field_vertex(5,5,angle),
+                   field_vertex(4,4,angle),field_vertex(4,1,angle),drop_step*4);
+    draw_ring_part(field_vertex(5,5,angle),field_vertex(0,5,angle),
+                   field_vertex(1,4,angle),field_vertex(4,4,angle),drop_step*5);
+    draw_ring_part(field_vertex(0,5,angle),field_vertex(0,0,angle),
+                   field_vertex(1,1,angle),field_vertex(1,4,angle),drop_step*4);
+}
+
 static u8 visible_side(const CubeFaces *cube, int angle, bool right)
 {
     unsigned view = ((unsigned)(angle + 5) / 10) & 3;
@@ -258,29 +281,29 @@ static u8 visible_side(const CubeFaces *cube, int angle, bool right)
 
 static void draw_cube(const GameState *game, const Motion *motion, int angle)
 {
-    int hx = game->x*2-2, hy = game->y*2-2;
+    int hx = game->x*2-4, hy = game->y*2-4;
     int lift = 0, lean_x = 0;
     CubeFaces faces = game->cube;
     Point center, top, right, bottom, left, top_peak, right_peak, left_peak;
     if (motion->kind == MOTION_ROLL) {
-        lift = (motion->step <= 5 ? motion->step : 10-motion->step)*2;
-        lean_x = motion->step-5;
+        lift = motion->step <= 5 ? motion->step : 10-motion->step;
+        lean_x = (motion->step-5)/2;
         if (motion->step < 5) faces=motion->cube_before;
     }
     center=project_half(hx,hy,angle,300,186);
     if (motion->kind == MOTION_ROLL) {
-        Point from=project_half(motion->from_x*2-2,motion->from_y*2-2,angle,300,186);
+        Point from=project_half(motion->from_x*2-4,motion->from_y*2-4,angle,300,186);
         center.x=from.x+(center.x-from.x)*motion->step/MOTION_STEPS;
         center.y=from.y+(center.y-from.y)*motion->step/MOTION_STEPS;
     }
     center.y -= lift;
-    top.x=center.x+lean_x; top.y=center.y-34;
-    right.x=center.x+40; right.y=center.y-15;
+    top.x=center.x+lean_x; top.y=center.y-22;
+    right.x=center.x+26; right.y=center.y-10;
     bottom.x=center.x; bottom.y=center.y;
-    left.x=center.x-40; left.y=center.y-15;
-    top_peak.x=center.x+lean_x; top_peak.y=center.y-64;
-    right_peak.x=center.x+40+lean_x; right_peak.y=center.y-49;
-    left_peak.x=center.x-40+lean_x; left_peak.y=center.y-49;
+    left.x=center.x-26; left.y=center.y-10;
+    top_peak.x=center.x+lean_x; top_peak.y=center.y-42;
+    right_peak.x=center.x+26+lean_x; right_peak.y=center.y-32;
+    left_peak.x=center.x-26+lean_x; left_peak.y=center.y-32;
     quad(top_peak,right_peak,top,left_peak,color_of(faces.top));
     quad(right_peak,right,bottom,top,color_of(visible_side(&faces,angle,true)));
     quad(left_peak,top,bottom,left,color_of(visible_side(&faces,angle,false)));
@@ -340,6 +363,7 @@ void video_render_title(void)
     for(row=0;row<60;++row) hline(72+row*2,568-row*2,36+row,13);
     text(278,63,"CUBOLOR",15);
     text(224,142,"ROLL PAINT MATCH",14);
+    text(194,166,"BORDER ROLLS ARE FREE",7);
     text(206,190,"NUM 4 8 6 2  MOVE",11);
     text(200,218,"NUM 7 1    TURN LEFT",10);
     text(194,246,"NUM 9 3    TURN RIGHT",12);
@@ -354,11 +378,13 @@ void video_render_game(const GameState *game,const Motion *motion)
     if(fresh) clear_page(1);
     else {
         /* The rotating board and rolling cube never leave this byte-aligned box. */
-        clear_byte_rect(11,56,53,214,1);
+        clear_byte_rect(10,64,55,258,1);
         clear_byte_rect(10,326,8,14,1);
     }
     if(profiling) profile.clear_ticks+=elapsed(started);
     started=platform_profile_read();
+    if(game->border_active || motion->drop_after_roll || motion->kind==MOTION_DROP)
+        draw_outer_ring(angle,motion->kind==MOTION_DROP ? motion->step : 0);
     for(i=0;i<9;++i) order[i]=i;
     for(i=1;i<9;++i) { unsigned value=order[i]; int depth=depth_cache[angle][value]; j=i;
         while(j>0) { int other=depth_cache[angle][order[j-1]];
