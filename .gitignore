@@ -1,0 +1,6 @@
+.tools/
+build/
+dist/
+*.LOG
+*.OBJ
+*.ERR
