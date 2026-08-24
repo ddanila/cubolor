@@ -6,7 +6,7 @@ Cubolor treats period-machine performance as a build requirement.
 
 - CPU class: 486DX-50
 - DOSBox-X deterministic approximation: `cputype=486`, `cycles=fixed 10000`
-- Display: EGA 320×200×16 (`machine=ega`)
+- Display: EGA 640×350×16 BIOS mode `10h` (`machine=ega`)
 - Gameplay cadence: 50 Hz
 - Required uncapped renderer throughput: at least 50.0 FPS
 
@@ -32,14 +32,16 @@ Recorded on 2026-08-24 with the pinned Open Watcom 2026-08-01 build and
 DOSBox-X 2025.02.01:
 
 ```text
-486DX-50 performance: PASS (64.7 fps at 10000 cycles; minimum 50.0)
-Profile ticks: clear=240870 board=2335349 cube=405890 hud=693193 present=1808
+486DX-50 performance: PASS (59.6 fps at 10000 cycles; minimum 50.0)
+Profile ticks: clear=419833 board=2626167 cube=801392 hud=143676 present=1806
 ```
 
 ## Hot-path safeguards
 
 - direct planar EGA writes; no chunky-to-planar conversion;
-- two 8,000-byte pages and CRTC page flips;
+- two 28,000-byte pages and byte-addressed CRTC page flips on 256 KiB EGA;
+- per-page static HUD and target caches;
+- precomputed projection and depth tables for all 40 animation angles;
 - write-mode-2 color expansion;
 - cached EGA bit-mask register state;
 - 386 `rep stosb` full spans and page clears;

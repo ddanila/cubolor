@@ -14,7 +14,8 @@ static int selftest(void)
 {
     GameState game; Motion motion=no_motion(); u32 checksum;
     game_start(&game,0);
-    video_init(); video_render_game(&game,&motion); video_present();
+    if(!video_init()) { puts("CUBOLOR SELFTEST FAIL MODE"); return 1; }
+    video_render_game(&game,&motion); video_present();
     checksum=video_page_checksum(); video_shutdown();
     if(checksum==0) { puts("CUBOLOR SELFTEST FAIL"); return 1; }
     printf("CUBOLOR SELFTEST PASS CRC=%08lX\n",checksum);
@@ -25,7 +26,9 @@ static int benchmark(void)
 {
     GameState game; Motion motion=no_motion(); VideoProfile p;
     u32 total=0; unsigned frame; u32 fps10;
-    game_start(&game,5); video_init(); platform_profile_init(); video_vsync_enable(false);
+    game_start(&game,5);
+    if(!video_init()) { puts("CUBOLOR BENCH FAIL MODE"); return 1; }
+    platform_profile_init(); video_vsync_enable(false);
     video_profile_reset(); video_profile_enable(true);
     for(frame=0;frame<200;++frame) {
         u16 start=platform_profile_read();
@@ -46,7 +49,8 @@ static int benchmark(void)
 static int capture(void)
 {
     GameState game; Motion motion=no_motion(); bool ok;
-    game_start(&game,3); game.view=1; video_init();
+    game_start(&game,3); game.view=1;
+    if(!video_init()) { puts("CUBOLOR CAPTURE FAIL MODE"); return 1; }
     video_render_game(&game,&motion); video_present(); ok=video_write_ppm("CUBOLOR.PPM");
     video_shutdown(); puts(ok?"CUBOLOR CAPTURE PASS":"CUBOLOR CAPTURE FAIL"); return ok?0:1;
 }
@@ -68,7 +72,9 @@ int main(int argc,char **argv)
     if(argc>1 && strcmp(argv[1],"-capture")==0) return capture();
     game_start(&game,0);
     if(!platform_install()) { puts("CUBOLOR: keyboard/timer install failed"); return 1; }
-    video_init();
+    if(!video_init()) {
+        platform_remove(); puts("CUBOLOR: EGA 640x350 mode 10h unavailable"); return 1;
+    }
     while(running) {
         u32 tick=platform_ticks();
         if(title) {

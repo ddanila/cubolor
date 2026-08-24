@@ -5,8 +5,9 @@ cube over a 3×3 floor: every square takes the color of the cube face touching
 it. Reproduce the target picture shown at the top right to finish the level.
 
 The game is a 16-bit real-mode executable for a 386 or newer PC with EGA. It
-renders directly into planar 320×200×16 video memory and uses two 8,000-byte EGA
-pages. There are no runtime data files.
+renders directly into high-resolution planar 640×350×16 mode `10h` video memory
+and uses two 28,000-byte EGA pages. A 256 KiB EGA card is required for the
+flicker-free page pair. There are no runtime data files.
 
 ## Playing
 
@@ -48,7 +49,7 @@ hosts are supported. `make dist` creates a ready-to-copy DOS directory.
 Gameplay is paced at 50 Hz by a restored-on-exit PIT interrupt. The benchmark
 disables vertical synchronization and profiles clear, board, cube, HUD, and
 page-flip stages separately. On the development profile, the MVP renders at
-64.7 raw FPS; see [performance.md](docs/performance.md) for the method and
+59.6 raw FPS; see [performance.md](docs/performance.md) for the method and
 latest recorded figures.
 
 Command-line diagnostics are `-selftest`, `-benchmark`, and `-capture`.

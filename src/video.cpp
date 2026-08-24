@@ -8,10 +8,10 @@
 #include <stdio.h>
 #include <string.h>
 
-#define SCREEN_W 320
-#define SCREEN_H 200
-#define PITCH 40
-#define PAGE_BYTES 8000
+#define SCREEN_W 640
+#define SCREEN_H 350
+#define PITCH 80
+#define PAGE_BYTES 28000
 
 struct Point { int x, y; };
 
@@ -22,6 +22,9 @@ static bool profiling;
 static bool vsync_enabled = true;
 static VideoProfile profile;
 static unsigned char current_bit_mask = 0;
+static signed char cached_level[2] = {-1,-1};
+static Point cell_cache[40][CELL_COUNT][4];
+static short depth_cache[40][CELL_COUNT];
 
 static const unsigned char ega_color[11] = {
     8, 9, 10, 11, 12, 13, 14, 15, 8, 7, 0
@@ -64,6 +67,14 @@ static void set_mode(unsigned mode)
     union REGS regs;
     regs.w.ax = mode;
     int86(0x10, &regs, &regs);
+}
+
+static bool mode_is_ega_high_resolution(void)
+{
+    union REGS regs;
+    regs.w.ax=0x0f00;
+    int86(0x10,&regs,&regs);
+    return regs.h.al==0x10;
 }
 
 static void set_bit_mask(unsigned char mask)
@@ -115,6 +126,15 @@ static void clear_page(unsigned char color)
     fill_run_386(draw_page, PAGE_BYTES, color);
 }
 
+static void clear_byte_rect(unsigned byte_x, unsigned y, unsigned byte_width,
+                            unsigned height, unsigned char color)
+{
+    unsigned row;
+    set_bit_mask(0xff);
+    for(row=0;row<height;++row)
+        fill_run_386(draw_page+(y+row)*PITCH+byte_x,byte_width,color);
+}
+
 static void quad(Point a, Point b, Point c, Point d, unsigned char color)
 {
     Point p[4]; int left[96],right[96]; int min_y=a.y,max_y=a.y,y,edge,height;
@@ -156,16 +176,23 @@ static void text(int x, int y, const char *value, unsigned char color)
         if (*value != ' ') {
             unsigned index = glyph_index(*value); int row;
             for (row=0; row<7; ++row) {
-                unsigned bits=font[index][row]; unsigned shift=(unsigned)x&7;
-                unsigned pattern=bits<<(11-shift); unsigned offset;
-                offset=draw_page+(unsigned)(y+row)*PITCH+((unsigned)x>>3);
-                if(pattern>>8) { unsigned char mask=(unsigned char)(pattern>>8);
-                    set_bit_mask(mask); (void)vram[offset]; vram[offset]=color; }
-                if(pattern&0xff) { unsigned char mask=(unsigned char)pattern;
-                    set_bit_mask(mask); (void)vram[offset+1]; vram[offset+1]=color; }
+                unsigned bits=font[index][row],column; u32 expanded=0,pattern; int copy;
+                for(column=0;column<5;++column) {
+                    expanded<<=2;
+                    if(bits&(16U>>column)) expanded|=3;
+                }
+                pattern=expanded<<(22-((unsigned)x&7));
+                for(copy=0;copy<2;++copy) {
+                    unsigned offset=draw_page+(unsigned)(y+row*2+copy)*PITCH+((unsigned)x>>3);
+                    unsigned part;
+                    for(part=0;part<3;++part) {
+                        unsigned char mask=(unsigned char)(pattern>>(24-part*8));
+                        if(mask) { set_bit_mask(mask); (void)vram[offset+part]; vram[offset+part]=color; }
+                    }
+                }
             }
         }
-        x += 6; ++value;
+        x += 12; ++value;
     }
 }
 
@@ -183,17 +210,29 @@ static int angle_for(const GameState *game, const Motion *motion)
 static Point project_half(int hx, int hy, int angle, int center_x, int center_y)
 {
     Point point;
-    point.x = center_x + ((long)cos_table[angle]*hx-(long)sin_table[angle]*hy)*22/256;
-    point.y = center_y + ((long)sin_table[angle]*hx+(long)cos_table[angle]*hy)*11/256;
+    point.x = center_x + ((long)cos_table[angle]*hx-(long)sin_table[angle]*hy)*48/256;
+    point.y = center_y + ((long)sin_table[angle]*hx+(long)cos_table[angle]*hy)*18/256;
     return point;
 }
 
 static void cell_points(unsigned x, unsigned y, int angle, Point *points)
 {
-    points[0]=project_half((int)x*2-3,(int)y*2-3,angle,145,104);
-    points[1]=project_half((int)x*2-1,(int)y*2-3,angle,145,104);
-    points[2]=project_half((int)x*2-1,(int)y*2-1,angle,145,104);
-    points[3]=project_half((int)x*2-3,(int)y*2-1,angle,145,104);
+    unsigned index=y*BOARD_SIZE+x;
+    points[0]=cell_cache[angle][index][0]; points[1]=cell_cache[angle][index][1];
+    points[2]=cell_cache[angle][index][2]; points[3]=cell_cache[angle][index][3];
+}
+
+static void init_cell_cache(void)
+{
+    unsigned angle,x,y;
+    for(angle=0;angle<40;++angle) for(y=0;y<BOARD_SIZE;++y) for(x=0;x<BOARD_SIZE;++x) {
+        unsigned index=y*BOARD_SIZE+x; Point *points=cell_cache[angle][index];
+        points[0]=project_half((int)x*2-3,(int)y*2-3,angle,300,186);
+        points[1]=project_half((int)x*2-1,(int)y*2-3,angle,300,186);
+        points[2]=project_half((int)x*2-1,(int)y*2-1,angle,300,186);
+        points[3]=project_half((int)x*2-3,(int)y*2-1,angle,300,186);
+        depth_cache[angle][index]=(short)(points[0].y+points[2].y);
+    }
 }
 
 static unsigned char color_of(u8 semantic)
@@ -224,37 +263,38 @@ static void draw_cube(const GameState *game, const Motion *motion, int angle)
     CubeFaces faces = game->cube;
     Point center, top, right, bottom, left, top_peak, right_peak, left_peak;
     if (motion->kind == MOTION_ROLL) {
-        lift = motion->step <= 5 ? motion->step : 10-motion->step;
-        lean_x = (motion->step-5)/2;
+        lift = (motion->step <= 5 ? motion->step : 10-motion->step)*2;
+        lean_x = motion->step-5;
         if (motion->step < 5) faces=motion->cube_before;
     }
-    center=project_half(hx,hy,angle,145,104);
+    center=project_half(hx,hy,angle,300,186);
     if (motion->kind == MOTION_ROLL) {
-        Point from=project_half(motion->from_x*2-2,motion->from_y*2-2,angle,145,104);
+        Point from=project_half(motion->from_x*2-2,motion->from_y*2-2,angle,300,186);
         center.x=from.x+(center.x-from.x)*motion->step/MOTION_STEPS;
         center.y=from.y+(center.y-from.y)*motion->step/MOTION_STEPS;
     }
     center.y -= lift;
-    top.x=center.x+lean_x; top.y=center.y-24;
-    right.x=center.x+18; right.y=center.y-15;
-    bottom.x=center.x; bottom.y=center.y-6;
-    left.x=center.x-18; left.y=center.y-15;
-    top_peak=top; right_peak=right; left_peak=left;
-    top_peak.y-=15; right_peak.y-=15; left_peak.y-=15;
+    top.x=center.x+lean_x; top.y=center.y-34;
+    right.x=center.x+40; right.y=center.y-15;
+    bottom.x=center.x; bottom.y=center.y;
+    left.x=center.x-40; left.y=center.y-15;
+    top_peak.x=center.x+lean_x; top_peak.y=center.y-64;
+    right_peak.x=center.x+40+lean_x; right_peak.y=center.y-49;
+    left_peak.x=center.x-40+lean_x; left_peak.y=center.y-49;
     quad(top_peak,right_peak,top,left_peak,color_of(faces.top));
     quad(right_peak,right,bottom,top,color_of(visible_side(&faces,angle,true)));
-    quad(left_peak,top_peak,top,left,color_of(visible_side(&faces,angle,false)));
+    quad(left_peak,top,bottom,left,color_of(visible_side(&faces,angle,false)));
 }
 
 static void draw_target(const GameState *game)
 {
     unsigned x,y;
-    text(246,14,"TARGET",15);
+    text(500,16,"TARGET",15);
     for (y=0;y<BOARD_SIZE;++y) for(x=0;x<BOARD_SIZE;++x) {
-        int left=251+(int)x*18, top=29+(int)y*12;
+        int left=508+(int)x*38, top=45+(int)y*27;
         unsigned char c=color_of(game->target[y*BOARD_SIZE+x]);
-        int row; for(row=0;row<10;++row) hline(left,left+15,top+row,c);
-        hline(left,left+15,top,0); hline(left,left+15,top+9,0);
+        int row; for(row=0;row<23;++row) hline(left,left+33,top+row,c);
+        hline(left,left+33,top,0); hline(left,left+33,top+22,0);
     }
 }
 
@@ -267,12 +307,14 @@ static void draw_number(int x,int y,unsigned value,unsigned char color)
 
 bool video_init(void)
 {
-    set_mode(0x0d);
+    set_mode(0x10);
+    if(!mode_is_ega_high_resolution()) { set_mode(3); return false; }
     outpw(0x3ce,0x0205); /* write mode 2: CPU low nibble selects plane color */
     outpw(0x3ce,0x0003);
     outpw(0x3ce,0x0001);
     outpw(0x3ce,0x0000);
-    draw_page=PAGE_BYTES; display_page=0;
+    init_cell_cache(); draw_page=PAGE_BYTES; display_page=0;
+    cached_level[0]=-1; cached_level[1]=-1;
     clear_page(0); video_present(); clear_page(0); video_present();
     return true;
 }
@@ -294,25 +336,32 @@ void video_vsync_enable(bool enabled) { vsync_enabled=enabled; }
 void video_render_title(void)
 {
     int row; clear_page(1);
-    for(row=0;row<34;++row) hline(36+row,282-row,24+row,13);
-    text(91,37,"CUBOLOR",15);
-    text(66,82,"ROLL PAINT MATCH",14);
-    text(50,109,"NUM 4 8 6 2  MOVE",11);
-    text(50,123,"NUM 7 1    TURN LEFT",10);
-    text(50,137,"NUM 9 3    TURN RIGHT",12);
-    text(68,166,"PRESS ENTER",15);
+    cached_level[draw_page ? 1 : 0]=-1;
+    for(row=0;row<60;++row) hline(72+row*2,568-row*2,36+row,13);
+    text(278,63,"CUBOLOR",15);
+    text(224,142,"ROLL PAINT MATCH",14);
+    text(206,190,"NUM 4 8 6 2  MOVE",11);
+    text(200,218,"NUM 7 1    TURN LEFT",10);
+    text(194,246,"NUM 9 3    TURN RIGHT",12);
+    text(254,304,"PRESS ENTER",15);
 }
 
 void video_render_game(const GameState *game,const Motion *motion)
 {
     u16 started; int angle=angle_for(game,motion); unsigned order[9],i,j;
-    started=platform_profile_read(); clear_page(1);
+    unsigned page=draw_page ? 1 : 0; bool fresh=cached_level[page]!=(signed char)game->level;
+    started=platform_profile_read();
+    if(fresh) clear_page(1);
+    else {
+        /* The rotating board and rolling cube never leave this byte-aligned box. */
+        clear_byte_rect(11,56,53,214,1);
+        clear_byte_rect(10,326,8,14,1);
+    }
     if(profiling) profile.clear_ticks+=elapsed(started);
     started=platform_profile_read();
     for(i=0;i<9;++i) order[i]=i;
-    for(i=1;i<9;++i) { unsigned value=order[i]; Point p[4]; int depth; j=i;
-        cell_points(value%3,value/3,angle,p); depth=p[0].y+p[2].y;
-        while(j>0) { Point q[4]; int other; cell_points(order[j-1]%3,order[j-1]/3,angle,q); other=q[0].y+q[2].y;
+    for(i=1;i<9;++i) { unsigned value=order[i]; int depth=depth_cache[angle][value]; j=i;
+        while(j>0) { int other=depth_cache[angle][order[j-1]];
             if(other<=depth) break; order[j]=order[j-1]; --j; }
         order[j]=value;
     }
@@ -321,19 +370,23 @@ void video_render_game(const GameState *game,const Motion *motion)
     started=platform_profile_read(); draw_cube(game,motion,angle);
     if(profiling) profile.cube_ticks+=elapsed(started);
     started=platform_profile_read();
-    text(9,12,"LEVEL",7); draw_number(46,12,game->level+1,15);
-    text(9,24,game_level_name(game->level),14);
-    text(9,181,"MOVES",7); draw_number(46,181,game->moves,15);
-    text(173,181,"U UNDO  R RESET",7); draw_target(game);
+    if(fresh) {
+        text(16,16,"LEVEL",7); draw_number(82,16,game->level+1,15);
+        text(16,42,game_level_name(game->level),14);
+        text(16,326,"MOVES",7);
+        text(340,326,"U UNDO  R RESET",7); draw_target(game);
+        cached_level[page]=(signed char)game->level;
+    }
+    draw_number(82,326,game->moves,15);
     if(profiling) { profile.hud_ticks+=elapsed(started); ++profile.frames; }
 }
 
 void video_render_complete(const GameState *game)
 {
     Motion motion; memset(&motion,0,sizeof(motion)); video_render_game(game,&motion);
-    { int row; for(row=0;row<38;++row) hline(54,232,72+row,0); }
-    text(88,82,"PICTURE COMPLETE",14);
-    text(75,99,"PRESS ENTER",15);
+    { int row; for(row=0;row<68;++row) hline(92,508,126+row,0); }
+    text(204,143,"PICTURE COMPLETE",14);
+    text(254,172,"PRESS ENTER",15);
 }
 
 void video_profile_enable(bool enabled) { profiling=enabled; }
@@ -360,7 +413,7 @@ bool video_write_ppm(const char *path)
     };
     unsigned char row[SCREEN_W*3]; FILE *file=fopen(path,"wb"); unsigned y,byte,bit,plane;
     if(file==0) return false;
-    fputs("P6\n320 200\n255\n",file); outpw(0x3ce,0x0005);
+    fputs("P6\n640 350\n255\n",file); outpw(0x3ce,0x0005);
     for(y=0;y<SCREEN_H;++y) {
         for(byte=0;byte<PITCH;++byte) {
             unsigned char planes[4];

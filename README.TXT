@@ -5,7 +5,7 @@ Roll the six-colored cube over the 3x3 floor. Every square takes the
 color of the cube face touching it. Match the target picture at top right.
 
 REQUIREMENTS
-  386 or newer PC, EGA graphics, MS-DOS compatible operating system.
+  386 or newer PC, 256 KiB EGA graphics, MS-DOS compatible operating system.
 
 CONTROLS
   Numeric keypad 4 8 6 2  Roll in the screen direction
