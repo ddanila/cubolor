@@ -33,8 +33,8 @@ Recorded on 2026-08-24 with the pinned Open Watcom 2026-08-01 build and
 DOSBox-X 2025.02.01:
 
 ```text
-486DX-50 performance: PASS (63.9 fps at 10000 cycles; minimum 50.0)
-Profile ticks: clear=319126 board=2425023 cube=910890 hud=64100 present=1806
+486DX-50 performance: PASS (66.9 fps at 10000 cycles; minimum 50.0)
+Profile ticks: clear=342160 board=2297063 cube=1348466 hud=288999 present=1803
 ```
 
 ## Hot-path safeguards
@@ -52,5 +52,7 @@ Profile ticks: clear=319126 board=2425023 cube=910890 hud=64100 present=1806
 - 386 `rep stosb` full spans and page clears;
 - fixed-point projection and edge walking;
 - precomputed rolling-cube vertices, face visibility, and dirty redraw bounds;
+- geometry-derived outer-platform dirty masks and clipped polygon spans;
+- plane-batched black field outlines stored in a separate far-data segment;
 - no dynamic allocation or asset decompression in the frame loop;
 - deterministic native and target-side tests in CI.

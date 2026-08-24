@@ -4,14 +4,23 @@
 
 #include <conio.h>
 #include <dos.h>
+#include <fcntl.h>
 #include <i86.h>
+#include <io.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #define SCREEN_W 640
 #define SCREEN_H 350
 #define PITCH 80
 #define PAGE_BYTES 28000
+#define OUTLINE_X 80
+#define OUTLINE_Y 64
+#define OUTLINE_W 440
+#define OUTLINE_BYTE_X 10
+#define OUTLINE_BYTE_W 55
+#define OUTLINE_H 286
 
 struct Point { int x, y; };
 struct Point3 { int x, y, z; };
@@ -24,6 +33,8 @@ static unsigned draw_page;
 static unsigned display_page;
 static bool profiling;
 static bool vsync_enabled = true;
+static bool quad_clip_enabled;
+static int quad_clip_x1,quad_clip_y1,quad_clip_x2,quad_clip_y2;
 static VideoProfile profile;
 static unsigned char current_bit_mask = 0;
 static signed char cached_level[2] = {-1,-1};
@@ -32,6 +43,7 @@ static short depth_cache[40][CELL_COUNT];
 static Point3 roll_vertex[4][MOTION_STEPS][8];
 static Point3 rest_vertex[8];
 static u8 visible_face[40][5][MOTION_STEPS];
+static u8 __far outline_mask[OUTLINE_BYTE_W*OUTLINE_H];
 
 static const u8 cube_face_vertex[6][4] = {
     {1,3,7,5}, {2,6,7,3}, {0,4,6,2},
@@ -120,6 +132,33 @@ static void masked_write(unsigned offset, unsigned char color);
     "mov es:[di],al" \
     parm [di] [al] modify [ax dx es];
 
+static void apply_outline_plane(unsigned page,const u8 __far *mask);
+/* Scan the far-memory 1-bit outline mask once per EGA plane.  Keeping ES and
+ * DS loaded for the complete rectangle avoids per-pixel port writes. */
+#pragma aux apply_outline_plane = \
+    "push ds" \
+    "mov ds,dx" \
+    "mov ax,0a000h" \
+    "mov es,ax" \
+    "add di,5130" \
+    "mov bx,286" \
+    "row_loop:" \
+    "mov cx,55" \
+    "byte_loop:" \
+    "lodsb" \
+    "or al,al" \
+    "jz short skip_byte" \
+    "not al" \
+    "and es:[di],al" \
+    "skip_byte:" \
+    "inc di" \
+    "loop byte_loop" \
+    "add di,25" \
+    "dec bx" \
+    "jnz row_loop" \
+    "pop ds" \
+    parm [di] [dx si] modify [ax bx cx di si es];
+
 static void hline(int x1, int x2, int y, unsigned char color)
 {
     unsigned offset, first, last;
@@ -164,12 +203,12 @@ static void clear_byte_rect(unsigned byte_x, unsigned y, unsigned byte_width,
 
 static void quad(Point a, Point b, Point c, Point d, unsigned char color)
 {
-    Point p[4]; int left[96],right[96]; int min_y=a.y,max_y=a.y,y,edge,height;
+    Point p[4]; int left[160],right[160]; int min_y=a.y,max_y=a.y,y,edge,height;
     p[0]=a;p[1]=b;p[2]=c;p[3]=d;
     if(b.y<min_y)min_y=b.y;if(c.y<min_y)min_y=c.y;if(d.y<min_y)min_y=d.y;
     if(b.y>max_y)max_y=b.y;if(c.y>max_y)max_y=c.y;if(d.y>max_y)max_y=d.y;
     height=max_y-min_y;
-    if(height<=0 || height>96) return;
+    if(height<=0 || height>160) return;
     for(y=0;y<height;++y) { left[y]=32767; right[y]=-32767; }
     for(edge=0;edge<4;++edge) {
         Point p1=p[edge],p2=p[(edge+1)&3]; long x,step;
@@ -186,8 +225,32 @@ static void quad(Point a, Point b, Point c, Point d, unsigned char color)
             x+=step;
         }
     }
-    for(y=0;y<height;++y)
-        if(left[y]<=right[y]) hline(left[y],right[y],min_y+y,color);
+    for(y=0;y<height;++y)if(left[y]<=right[y]) {
+        int screen_y=min_y+y,lx=left[y],rx=right[y];
+        if(quad_clip_enabled) {
+            if(screen_y<quad_clip_y1 || screen_y>quad_clip_y2)continue;
+            if(lx<quad_clip_x1)lx=quad_clip_x1;if(rx>quad_clip_x2)rx=quad_clip_x2;
+        }
+        if(lx<=rx)hline(lx,rx,screen_y,color);
+    }
+}
+
+static void inset_quad(Point *p)
+{
+    int center_x=(p[0].x+p[1].x+p[2].x+p[3].x)/4;
+    int center_y=(p[0].y+p[1].y+p[2].y+p[3].y)/4;unsigned i;
+    for(i=0;i<4;++i) {
+        if(p[i].x<center_x)++p[i].x;else if(p[i].x>center_x)--p[i].x;
+        if(p[i].y<center_y)++p[i].y;else if(p[i].y>center_y)--p[i].y;
+    }
+}
+
+static void outlined_quad(Point *p,unsigned char color)
+{
+    Point inside[4];unsigned i;
+    quad(p[0],p[1],p[2],p[3],0);
+    for(i=0;i<4;++i)inside[i]=p[i];inset_quad(inside);
+    quad(inside[0],inside[1],inside[2],inside[3],color);
 }
 
 static unsigned glyph_index(char c)
@@ -297,11 +360,11 @@ static void init_cube_cache(void)
     }
 }
 
-static void cell_points(unsigned x, unsigned y, int angle, Point *points)
+static void cell_points(unsigned x,unsigned y,int angle,Point *points)
 {
     unsigned index=y*BOARD_SIZE+x;
-    points[0]=cell_cache[angle][index][0]; points[1]=cell_cache[angle][index][1];
-    points[2]=cell_cache[angle][index][2]; points[3]=cell_cache[angle][index][3];
+    points[0]=cell_cache[angle][index][0];points[1]=cell_cache[angle][index][1];
+    points[2]=cell_cache[angle][index][2];points[3]=cell_cache[angle][index][3];
 }
 
 static void init_cell_cache(void)
@@ -322,11 +385,10 @@ static unsigned char color_of(u8 semantic)
     return semantic < 11 ? ega_color[semantic] : 7;
 }
 
-static void draw_cell(unsigned x, unsigned y, u8 paint, int angle)
+static void draw_cell(unsigned x,unsigned y,u8 paint,int angle)
 {
-    Point p[4]; unsigned char fill = paint ? color_of(paint) : 8;
-    cell_points(x,y,angle,p);
-    quad(p[0],p[1],p[2],p[3],fill);
+    Point p[4];unsigned char fill=paint?color_of(paint):8;
+    cell_points(x,y,angle,p);quad(p[0],p[1],p[2],p[3],fill);
 }
 
 static Point field_vertex(unsigned x,unsigned y,int angle)
@@ -334,22 +396,105 @@ static Point field_vertex(unsigned x,unsigned y,int angle)
     return project_half((int)x*2-5,(int)y*2-5,angle,300,186);
 }
 
-static void draw_ring_part(Point a,Point b,Point c,Point d,int offset)
+static void ring_points(unsigned side,int angle,unsigned drop_step,Point *p)
 {
-    a.y+=offset;b.y+=offset;c.y+=offset;d.y+=offset;
-    quad(a,b,c,d,7);
+    int offset;
+    if(side==0) {
+        p[0]=field_vertex(0,0,angle);p[1]=field_vertex(5,0,angle);
+        p[2]=field_vertex(4,1,angle);p[3]=field_vertex(1,1,angle);offset=drop_step*3;
+    } else if(side==1) {
+        p[0]=field_vertex(5,0,angle);p[1]=field_vertex(5,5,angle);
+        p[2]=field_vertex(4,4,angle);p[3]=field_vertex(4,1,angle);offset=drop_step*4;
+    } else if(side==2) {
+        p[0]=field_vertex(5,5,angle);p[1]=field_vertex(0,5,angle);
+        p[2]=field_vertex(1,4,angle);p[3]=field_vertex(4,4,angle);offset=drop_step*5;
+    } else {
+        p[0]=field_vertex(0,5,angle);p[1]=field_vertex(0,0,angle);
+        p[2]=field_vertex(1,1,angle);p[3]=field_vertex(1,4,angle);offset=drop_step*4;
+    }
+    p[0].y+=offset;p[1].y+=offset;p[2].y+=offset;p[3].y+=offset;
 }
 
 static void draw_outer_ring(int angle,unsigned drop_step,unsigned mask)
 {
-    if(mask&1) draw_ring_part(field_vertex(0,0,angle),field_vertex(5,0,angle),
-                             field_vertex(4,1,angle),field_vertex(1,1,angle),drop_step*3);
-    if(mask&2) draw_ring_part(field_vertex(5,0,angle),field_vertex(5,5,angle),
-                             field_vertex(4,4,angle),field_vertex(4,1,angle),drop_step*4);
-    if(mask&4) draw_ring_part(field_vertex(5,5,angle),field_vertex(0,5,angle),
-                             field_vertex(1,4,angle),field_vertex(4,4,angle),drop_step*5);
-    if(mask&8) draw_ring_part(field_vertex(0,5,angle),field_vertex(0,0,angle),
-                             field_vertex(1,1,angle),field_vertex(1,4,angle),drop_step*4);
+    unsigned side;
+    for(side=0;side<4;++side)if(mask&(1U<<side)) {
+        Point p[4];ring_points(side,angle,drop_step,p);
+        quad(p[0],p[1],p[2],p[3],7);
+    }
+}
+
+static bool ring_side_intersects(unsigned side,int angle,int x1,int y1,int x2,int y2)
+{
+    Point p[4];int min_x,max_x,min_y,max_y;unsigned i;
+    ring_points(side,angle,0,p);min_x=max_x=p[0].x;min_y=max_y=p[0].y;
+    for(i=1;i<4;++i) {
+        if(p[i].x<min_x)min_x=p[i].x;if(p[i].x>max_x)max_x=p[i].x;
+        if(p[i].y<min_y)min_y=p[i].y;if(p[i].y>max_y)max_y=p[i].y;
+    }
+    return max_x>=x1 && min_x<=x2 && max_y>=y1 && min_y<=y2;
+}
+
+static void outline_span(int x1,int x2,int y,int clip_x1,int clip_y1,int clip_x2,int clip_y2)
+{
+    if(y<clip_y1 || y>clip_y2 || x2<clip_x1 || x1>clip_x2)return;
+    if(x1<clip_x1)x1=clip_x1;if(x2>clip_x2)x2=clip_x2;
+    if(y<OUTLINE_Y || y>=OUTLINE_Y+OUTLINE_H || x2<OUTLINE_X || x1>=OUTLINE_X+OUTLINE_W)return;
+    if(x1<OUTLINE_X)x1=OUTLINE_X;if(x2>=OUTLINE_X+OUTLINE_W)x2=OUTLINE_X+OUTLINE_W-1;
+    {
+        unsigned first=(unsigned)x1>>3,last=(unsigned)x2>>3;
+        unsigned row=(unsigned)(y-OUTLINE_Y)*OUTLINE_BYTE_W;
+        unsigned char left=(unsigned char)(0xff>>(x1&7));
+        unsigned char right=(unsigned char)(0xff<<(7-(x2&7)));
+        if(first==last)outline_mask[row+first-OUTLINE_BYTE_X]|=left&right;
+        else {
+            unsigned byte;outline_mask[row+first-OUTLINE_BYTE_X]|=left;
+            for(byte=first+1;byte<last;++byte)outline_mask[row+byte-OUTLINE_BYTE_X]=0xff;
+            outline_mask[row+last-OUTLINE_BYTE_X]|=right;
+        }
+    }
+}
+
+static void outline_line(Point a,Point b,int x1,int y1,int x2,int y2)
+{
+    int dx,dy,y,first_y,last_y;long current,step;
+    if(a.y>b.y){Point swap=a;a=b;b=swap;}dx=b.x-a.x;dy=b.y-a.y;
+    if(dy==0){int left=a.x<b.x?a.x:b.x,right=a.x>b.x?a.x:b.x;
+        outline_span(left,right,a.y,x1,y1,x2,y2);return;}
+    first_y=a.y>y1?a.y:y1;last_y=b.y<y2?b.y:y2;
+    step=((long)dx*65536L)/dy;
+    current=(long)a.x*65536L+step*(first_y-a.y);
+    for(y=first_y;y<=last_y;++y) {
+        int pixel=(int)(current/65536L);
+        int next=y==b.y?pixel:(int)((current+step)/65536L);
+        int left=pixel<next?pixel:next,right=pixel>next?pixel:next;
+        outline_span(left,right,y,x1,y1,x2,y2);
+        current+=step;
+    }
+}
+
+static void field_wireframe(const GameState *game,const Motion *motion,int angle,
+                            int x1,int y1,int x2,int y2)
+{
+    unsigned i;bool whole=game->border_active || motion->drop_after_roll;
+    if(motion->kind==MOTION_TURN)return;
+    if(motion->kind==MOTION_DROP) {
+        unsigned side;
+        for(i=1;i<=4;++i) {
+            outline_line(field_vertex(i,1,angle),field_vertex(i,4,angle),x1,y1,x2,y2);
+            outline_line(field_vertex(1,i,angle),field_vertex(4,i,angle),x1,y1,x2,y2);
+        }
+        for(side=0;side<4;++side) {
+            Point p[4];unsigned edge;ring_points(side,angle,motion->step,p);
+            for(edge=0;edge<4;++edge)outline_line(p[edge],p[(edge+1)&3],x1,y1,x2,y2);
+        }
+    } else {
+        unsigned first=whole?0:1,last=whole?5:4;
+        for(i=first;i<=last;++i) {
+            outline_line(field_vertex(i,first,angle),field_vertex(i,last,angle),x1,y1,x2,y2);
+            outline_line(field_vertex(first,i,angle),field_vertex(last,i,angle),x1,y1,x2,y2);
+        }
+    }
 }
 
 static void draw_cube(const GameState *game, const Motion *motion, int angle)
@@ -376,10 +521,40 @@ static void draw_cube(const GameState *game, const Motion *motion, int angle)
         if(visible_face[angle][direction][step]&(1U<<face)) {
             Point p[4]; unsigned corner;
             for(corner=0;corner<4;++corner) p[corner]=screen[cube_face_vertex[face][corner]];
-            quad(p[0],p[1],p[2],p[3],color_of(face_color[face]));
+            if(motion->kind==MOTION_TURN)
+                quad(p[0],p[1],p[2],p[3],color_of(face_color[face]));
+            else outlined_quad(p,color_of(face_color[face]));
         }
     }
 }
+
+static void flush_mask_wireframe(void)
+{
+    unsigned plane;
+    outpw(0x3ce,0x0005);outpw(0x3ce,0xff08);
+    for(plane=0;plane<4;++plane) {
+        outpw(0x3c4,0x0002|((1U<<plane)<<8));
+        outpw(0x3ce,0x0004|(plane<<8));
+        apply_outline_plane(draw_page,outline_mask);
+    }
+    outpw(0x3c4,0x0f02);outpw(0x3ce,0x0004);outpw(0x3ce,0x0205);
+    current_bit_mask=0xff;
+}
+
+static void reset_wireframe(void)
+{
+    _fmemset(outline_mask,0,sizeof(outline_mask));
+}
+
+static void draw_field_wireframe(const GameState *game,const Motion *motion,int angle,
+                                 bool dirty,int x1,int y1,int x2,int y2)
+{
+    reset_wireframe();
+    field_wireframe(game,motion,angle,
+                    dirty?x1:0,dirty?y1:0,dirty?x2:SCREEN_W-1,dirty?y2:SCREEN_H-1);
+    flush_mask_wireframe();
+}
+
 
 static void draw_target(const GameState *game)
 {
@@ -407,8 +582,8 @@ static void roll_dirty_bounds(const GameState *game,const Motion *motion,int ang
 
 static bool cell_intersects(unsigned index,int angle,int x1,int y1,int x2,int y2)
 {
-    Point *points=cell_cache[angle][index]; int min_x=points[0].x,max_x=points[0].x;
-    int min_y=points[0].y,max_y=points[0].y; unsigned corner;
+    Point *points=cell_cache[angle][index];int min_x=points[0].x,max_x=points[0].x;
+    int min_y=points[0].y,max_y=points[0].y;unsigned corner;
     for(corner=1;corner<4;++corner) {
         if(points[corner].x<min_x)min_x=points[corner].x;
         if(points[corner].x>max_x)max_x=points[corner].x;
@@ -469,7 +644,7 @@ void video_render_title(void)
 
 void video_render_game(const GameState *game,const Motion *motion)
 {
-    u16 started; int angle=angle_for(game,motion); unsigned order[9],i,j;
+    u16 started;int angle=angle_for(game,motion);unsigned order[9],i,j;
     unsigned page=draw_page ? 1 : 0; bool fresh=cached_level[page]!=(signed char)game->level;
     bool dirty_roll=!fresh && motion->kind==MOTION_ROLL; int dirty_x1=0,dirty_y1=0,dirty_x2=0,dirty_y2=0;
     started=platform_profile_read();
@@ -482,47 +657,54 @@ void video_render_game(const GameState *game,const Motion *motion)
     }
     else {
         /* The rotating board and rolling cube never leave this byte-aligned box. */
-        clear_byte_rect(10,64,55,258,1);
-        clear_byte_rect(10,326,8,14,1);
+        clear_byte_rect(10,64,55,286,1);
     }
     if(profiling) profile.clear_ticks+=elapsed(started);
     started=platform_profile_read();
+    quad_clip_enabled=dirty_roll;
+    if(dirty_roll) {
+        quad_clip_x1=dirty_x1;quad_clip_y1=dirty_y1;
+        quad_clip_x2=dirty_x2;quad_clip_y2=dirty_y2;
+    }
     if(game->border_active || motion->drop_after_roll || motion->kind==MOTION_DROP) {
         unsigned ring_mask=15;
         if(dirty_roll) {
-            ring_mask=0;
-            if(motion->from_y==0 || game->y==0)ring_mask|=1;
-            if(motion->from_x==FIELD_SIZE-1 || game->x==FIELD_SIZE-1)ring_mask|=2;
-            if(motion->from_y==FIELD_SIZE-1 || game->y==FIELD_SIZE-1)ring_mask|=4;
-            if(motion->from_x==0 || game->x==0)ring_mask|=8;
+            unsigned side;ring_mask=0;
+            for(side=0;side<4;++side)
+                if(ring_side_intersects(side,angle,dirty_x1,dirty_y1,dirty_x2,dirty_y2))
+                    ring_mask|=1U<<side;
         }
-        draw_outer_ring(angle,motion->kind==MOTION_DROP ? motion->step : 0,ring_mask);
+        draw_outer_ring(angle,motion->kind==MOTION_DROP?motion->step:0,ring_mask);
     }
-    for(i=0;i<9;++i) order[i]=i;
-    for(i=1;i<9;++i) { unsigned value=order[i]; int depth=depth_cache[angle][value]; j=i;
+    for(i=0;i<9;++i)order[i]=i;
+    for(i=1;i<9;++i) { unsigned value=order[i];int depth=depth_cache[angle][value];j=i;
         while(j>0) { int other=depth_cache[angle][order[j-1]];
-            if(other<=depth) break; order[j]=order[j-1]; --j; }
+            if(other<=depth)break;order[j]=order[j-1];--j; }
         order[j]=value;
     }
     for(i=0;i<9;++i) {
-        unsigned index=order[i]; u8 paint=game->paint[index];
-        if(dirty_roll && !cell_intersects(index,angle,dirty_x1,dirty_y1,dirty_x2,dirty_y2)) continue;
+        unsigned index=order[i];u8 paint=game->paint[index];
+        if(dirty_roll && !cell_intersects(index,angle,dirty_x1,dirty_y1,dirty_x2,dirty_y2))continue;
         if(motion->kind==MOTION_ROLL && game_is_inner(game->x,game->y) &&
            index==(unsigned)(game->y-INNER_OFFSET)*BOARD_SIZE+(game->x-INNER_OFFSET))
             paint=motion->destination_paint_before;
         draw_cell(index%3,index/3,paint,angle);
     }
+    quad_clip_enabled=false;
+    draw_field_wireframe(game,motion,angle,dirty_roll,
+                         dirty_x1,dirty_y1,dirty_x2,dirty_y2);
     if(profiling) profile.board_ticks+=elapsed(started);
-    started=platform_profile_read(); draw_cube(game,motion,angle);
+    started=platform_profile_read();draw_cube(game,motion,angle);
     if(profiling) profile.cube_ticks+=elapsed(started);
     started=platform_profile_read();
     if(fresh) {
         text(16,16,"LEVEL",7); draw_number(50,16,game->level+1,15);
         text(16,42,game_level_name(game->level),14);
         text(16,326,"MOVES",7);
-        text(340,326,"U UNDO  R RESET",7); draw_target(game);
+        draw_target(game);
         cached_level[page]=(signed char)game->level;
     }
+    if(fresh || !dirty_roll)text(340,326,"U UNDO  R RESET",7);
     draw_number(50,326,game->moves,15);
     if(profiling) { profile.hud_ticks+=elapsed(started); ++profile.frames; }
 }
@@ -553,13 +735,16 @@ u32 video_page_checksum(void)
 
 bool video_write_ppm(const char *path)
 {
+    static const char header[]="P6\n640 350\n255\n";
     static const unsigned char rgb[16][3] = {
         {0,0,0},{0,0,170},{0,170,0},{0,170,170},{170,0,0},{170,0,170},{170,85,0},{170,170,170},
         {85,85,85},{85,85,255},{85,255,85},{85,255,255},{255,85,85},{255,85,255},{255,255,85},{255,255,255}
     };
-    unsigned char row[SCREEN_W*3]; FILE *file=fopen(path,"wb"); unsigned y,byte,bit,plane;
-    if(file==0) return false;
-    fputs("P6\n640 350\n255\n",file); outpw(0x3ce,0x0005);
+    unsigned char row[SCREEN_W*3];int file=open(path,O_WRONLY|O_CREAT|O_TRUNC|O_BINARY,S_IREAD|S_IWRITE);
+    unsigned y,byte,bit,plane;
+    if(file<0)return false;
+    if(write(file,header,sizeof(header)-1)!=(int)(sizeof(header)-1)){close(file);return false;}
+    outpw(0x3ce,0x0005);
     for(y=0;y<SCREEN_H;++y) {
         for(byte=0;byte<PITCH;++byte) {
             unsigned char planes[4];
@@ -570,8 +755,8 @@ bool video_write_ppm(const char *path)
                 row[pixel*3]=rgb[index][0];row[pixel*3+1]=rgb[index][1];row[pixel*3+2]=rgb[index][2];
             }
         }
-        if(fwrite(row,1,sizeof(row),file)!=sizeof(row)) { fclose(file); return false; }
+        if(write(file,row,sizeof(row))!=(int)sizeof(row)){close(file);return false;}
     }
-    if(fflush(file)!=0) { fclose(file); return false; }
-    fclose(file); outpw(0x3ce,0x0205); current_bit_mask=0; return true;
+    if(close(file)!=0)return false;
+    outpw(0x3ce,0x0205);current_bit_mask=0;return true;
 }

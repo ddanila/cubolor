@@ -30,6 +30,10 @@ contains six hand-authored, provably reachable 3×3 target pictures. Border
 movement neither paints nor increases the move counter. Undoing across the
 first inward roll restores the ring.
 
+Black one-pixel outlines separate the field cells and visible cube faces. To
+protect the 486 frame budget, internal field lines are restored when a camera
+quarter-turn lands; cube-roll animation keeps the complete grid visible.
+
 ## Build and test
 
 Install GNU Make, Bash, curl, unzip, a C++ compiler, and DOSBox-X, then run:
@@ -57,7 +61,7 @@ hosts are supported. `make dist` creates a ready-to-copy DOS directory.
 Gameplay is paced at 50 Hz by a restored-on-exit PIT interrupt. The benchmark
 disables vertical synchronization and profiles clear, board, cube, HUD, and
 page-flip stages separately. On the development profile, the MVP renders at
-63.9 raw FPS; see [performance.md](docs/performance.md) for the method and
+66.9 raw FPS; see [performance.md](docs/performance.md) for the method and
 latest recorded figures.
 
 Command-line diagnostics are `-selftest`, `-benchmark`, `-capture`,

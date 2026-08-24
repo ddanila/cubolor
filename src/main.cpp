@@ -12,20 +12,24 @@ static Motion no_motion(void)
 
 static int selftest(void)
 {
-    GameState game; Motion motion=no_motion(); u32 checksum;
+    GameState game; Motion motion=no_motion(); u32 checksum; unsigned frame;
     game_start(&game,0);
     if(!video_init()) { puts("CUBOLOR SELFTEST FAIL MODE"); return 1; }
     video_render_game(&game,&motion); video_present();
     checksum=video_page_checksum();
-    motion.kind=MOTION_ROLL; motion.step=5; motion.from_x=game.x; motion.from_y=game.y;
+    motion.kind=MOTION_ROLL; motion.step=0; motion.from_x=game.x; motion.from_y=game.y;
     motion.cube_before=game.cube;
     game_move(&game,WORLD_EAST);
     motion.drop_after_roll=1;
-    video_render_game(&game,&motion); video_present();
-    checksum^=video_page_checksum();
-    motion.kind=MOTION_DROP; motion.step=6;
-    video_render_game(&game,&motion); video_present();
-    checksum^=video_page_checksum();
+    for(frame=0;frame<MOTION_STEPS;++frame) {
+        motion.step=(u8)frame;video_render_game(&game,&motion);video_present();
+        checksum^=video_page_checksum();
+    }
+    motion.kind=MOTION_DROP;motion.drop_after_roll=0;
+    for(frame=0;frame<MOTION_STEPS;++frame) {
+        motion.step=(u8)frame;video_render_game(&game,&motion);video_present();
+        checksum^=video_page_checksum();
+    }
     motion=no_motion(); video_render_game(&game,&motion); video_present();
     checksum^=video_page_checksum(); video_shutdown();
     if(checksum==0) { puts("CUBOLOR SELFTEST FAIL"); return 1; }
@@ -68,16 +72,21 @@ static int benchmark(void)
 
 static int capture(bool rolling,bool title)
 {
-    GameState game; Motion motion=no_motion(); bool ok;
+    GameState game; Motion motion=no_motion(); bool ok; unsigned frame;
     game_start(&game,rolling ? 0 : 3); game.view=rolling ? 0 : 1;
     if(!video_init()) { puts("CUBOLOR CAPTURE FAIL MODE"); return 1; }
     if(rolling) {
-        motion.kind=MOTION_ROLL; motion.step=5;
+        motion.kind=MOTION_ROLL; motion.step=0;
         motion.from_x=game.x; motion.from_y=game.y; motion.cube_before=game.cube;
         game_move(&game,WORLD_EAST); motion.drop_after_roll=1;
     }
-    if(title) video_render_title(); else video_render_game(&game,&motion);
-    video_present(); ok=video_write_ppm("CUBOLOR.PPM");
+    if(title) { video_render_title(); video_present(); }
+    else if(rolling) {
+        for(frame=0;frame<=5;++frame) {
+            motion.step=(u8)frame; video_render_game(&game,&motion); video_present();
+        }
+    } else { video_render_game(&game,&motion); video_present(); }
+    ok=video_write_ppm("CUBOLOR.PPM");
     video_shutdown(); puts(ok?"CUBOLOR CAPTURE PASS":"CUBOLOR CAPTURE FAIL");
     fflush(stdout); return ok?0:1;
 }
