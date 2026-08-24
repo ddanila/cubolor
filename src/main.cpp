@@ -17,7 +17,12 @@ static int selftest(void)
     if(!video_init()) { puts("CUBOLOR SELFTEST FAIL MODE"); return 1; }
     video_render_game(&game,&motion); video_present();
     checksum=video_page_checksum();
+    motion.kind=MOTION_ROLL; motion.step=5; motion.from_x=game.x; motion.from_y=game.y;
+    motion.cube_before=game.cube;
     game_move(&game,WORLD_EAST);
+    motion.drop_after_roll=1;
+    video_render_game(&game,&motion); video_present();
+    checksum^=video_page_checksum();
     motion.kind=MOTION_DROP; motion.step=6;
     video_render_game(&game,&motion); video_present();
     checksum^=video_page_checksum();
@@ -30,17 +35,26 @@ static int selftest(void)
 
 static int benchmark(void)
 {
-    GameState game; Motion motion=no_motion(); VideoProfile p;
+    GameState game,rolling_game; Motion motion=no_motion(); VideoProfile p;
     u32 total=0; unsigned frame; u32 fps10;
-    game_start(&game,5);
+    game_start(&game,5); game_start(&rolling_game,0);
+    motion.from_x=rolling_game.x; motion.from_y=rolling_game.y;
+    motion.cube_before=rolling_game.cube; motion.destination_paint_before=COLOR_EMPTY;
+    game_move(&rolling_game,WORLD_EAST);
     if(!video_init()) { puts("CUBOLOR BENCH FAIL MODE"); return 1; }
     platform_profile_init(); video_vsync_enable(false);
     video_profile_reset(); video_profile_enable(true);
     for(frame=0;frame<200;++frame) {
         u16 start=platform_profile_read();
-        motion.kind=MOTION_TURN; motion.view_from=0; motion.turn_delta=1;
-        motion.step=(u8)(frame%MOTION_STEPS);
-        video_render_game(&game,&motion); video_present();
+        motion.step=(u8)((frame/2)%MOTION_STEPS);
+        if(frame&1) {
+            motion.kind=MOTION_ROLL; motion.drop_after_roll=1;
+            video_render_game(&rolling_game,&motion);
+        } else {
+            motion.kind=MOTION_TURN; motion.view_from=0; motion.turn_delta=1;
+            motion.drop_after_roll=0; video_render_game(&game,&motion);
+        }
+        video_present();
         total+=(u16)(start-platform_profile_read());
     }
     video_profile_get(&p); video_profile_enable(false); video_shutdown();
@@ -52,22 +66,35 @@ static int benchmark(void)
     return 0;
 }
 
-static int capture(void)
+static int capture(bool rolling)
 {
     GameState game; Motion motion=no_motion(); bool ok;
-    game_start(&game,3); game.view=1;
+    game_start(&game,rolling ? 0 : 3); game.view=rolling ? 0 : 1;
     if(!video_init()) { puts("CUBOLOR CAPTURE FAIL MODE"); return 1; }
+    if(rolling) {
+        motion.kind=MOTION_ROLL; motion.step=5;
+        motion.from_x=game.x; motion.from_y=game.y; motion.cube_before=game.cube;
+        game_move(&game,WORLD_EAST); motion.drop_after_roll=1;
+    }
     video_render_game(&game,&motion); video_present(); ok=video_write_ppm("CUBOLOR.PPM");
-    video_shutdown(); puts(ok?"CUBOLOR CAPTURE PASS":"CUBOLOR CAPTURE FAIL"); return ok?0:1;
+    video_shutdown(); puts(ok?"CUBOLOR CAPTURE PASS":"CUBOLOR CAPTURE FAIL");
+    fflush(stdout); return ok?0:1;
 }
 
 static void begin_roll(GameState *game,Motion *motion,ScreenDirection direction)
 {
     WorldDirection world=game_screen_to_world(direction,game->view);
     bool border_was_active=game->border_active;
+    unsigned destination_x=game->x,destination_y=game->y;
     if(!game_can_move(game,world)) return;
     motion->kind=MOTION_ROLL; motion->step=0;
     motion->from_x=game->x; motion->from_y=game->y; motion->cube_before=game->cube;
+    if(world==WORLD_NORTH) --destination_y;
+    else if(world==WORLD_EAST) ++destination_x;
+    else if(world==WORLD_SOUTH) ++destination_y;
+    else --destination_x;
+    motion->destination_paint_before=game_is_inner(destination_x,destination_y) ?
+        game->paint[(destination_y-INNER_OFFSET)*BOARD_SIZE+(destination_x-INNER_OFFSET)] : COLOR_EMPTY;
     game_move(game,world);
     motion->drop_after_roll=(u8)(border_was_active && !game->border_active);
 }
@@ -77,7 +104,8 @@ int main(int argc,char **argv)
     GameState game; Motion motion=no_motion(); bool running=true; bool title=true;
     if(argc>1 && strcmp(argv[1],"-selftest")==0) return selftest();
     if(argc>1 && strcmp(argv[1],"-benchmark")==0) return benchmark();
-    if(argc>1 && strcmp(argv[1],"-capture")==0) return capture();
+    if(argc>1 && strcmp(argv[1],"-capture")==0) return capture(false);
+    if(argc>1 && strcmp(argv[1],"-capture-roll")==0) return capture(true);
     game_start(&game,0);
     if(!platform_install()) { puts("CUBOLOR: keyboard/timer install failed"); return 1; }
     if(!video_init()) {

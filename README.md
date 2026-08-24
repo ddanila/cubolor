@@ -11,6 +11,10 @@ renders directly into high-resolution planar 640×350×16 mode `10h` video memor
 and uses two 28,000-byte EGA pages. A 256 KiB EGA card is required for the
 flicker-free page pair. There are no runtime data files.
 
+EGA mode `10h` has a 640×350 framebuffer but was designed for a 4:3 CRT. The
+included DOSBox-X configuration enables aspect correction, so its 640×350
+guest image is displayed in a 640×480 viewport rather than with square pixels.
+
 ## Playing
 
 - Numpad `4`, `8`, `6`, `2`: roll left, up, right, or down as seen on screen
@@ -53,11 +57,12 @@ hosts are supported. `make dist` creates a ready-to-copy DOS directory.
 Gameplay is paced at 50 Hz by a restored-on-exit PIT interrupt. The benchmark
 disables vertical synchronization and profiles clear, board, cube, HUD, and
 page-flip stages separately. On the development profile, the MVP renders at
-57.8 raw FPS; see [performance.md](docs/performance.md) for the method and
+63.6 raw FPS; see [performance.md](docs/performance.md) for the method and
 latest recorded figures.
 
-Command-line diagnostics are `-selftest`, `-benchmark`, and `-capture`.
-`-capture` writes `CUBOLOR.PPM` in the current directory.
+Command-line diagnostics are `-selftest`, `-benchmark`, `-capture`, and
+`-capture-roll`. The capture commands write `CUBOLOR.PPM`; the latter records
+the cube halfway through an edge-pivoted roll.
 
 ## Credits
 

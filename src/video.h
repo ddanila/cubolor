@@ -19,6 +19,7 @@ struct Motion {
     u8 view_from;
     u8 from_x, from_y;
     u8 drop_after_roll;
+    u8 destination_paint_before;
     CubeFaces cube_before;
 };
 

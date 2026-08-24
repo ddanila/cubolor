@@ -14,6 +14,7 @@
 #define PAGE_BYTES 28000
 
 struct Point { int x, y; };
+struct Point3 { int x, y, z; };
 
 static unsigned char __far *vram = (unsigned char __far *)MK_FP(0xa000, 0);
 static unsigned draw_page;
@@ -25,6 +26,14 @@ static unsigned char current_bit_mask = 0;
 static signed char cached_level[2] = {-1,-1};
 static Point cell_cache[40][CELL_COUNT][4];
 static short depth_cache[40][CELL_COUNT];
+static Point3 roll_vertex[4][MOTION_STEPS][8];
+static Point3 rest_vertex[8];
+static u8 visible_face[40][5][MOTION_STEPS];
+
+static const u8 cube_face_vertex[6][4] = {
+    {1,3,7,5}, {2,6,7,3}, {0,4,6,2},
+    {0,1,5,4}, {4,5,7,6}, {0,2,3,1}
+};
 
 static const unsigned char ega_color[11] = {
     8, 9, 10, 11, 12, 13, 14, 15, 8, 7, 0
@@ -42,6 +51,12 @@ static const short sin_table[40] = {
     181,150,116,80,40,0,-40,-80,-116,-150,
     -181,-208,-228,-243,-253,-256,-253,-243,-228,-208,
     -181,-150,-116,-80,-40,0,40,80,116,150
+};
+static const short roll_cos[MOTION_STEPS+1] = {
+    256,253,243,228,208,181,150,116,80,40,0
+};
+static const short roll_sin[MOTION_STEPS+1] = {
+    0,40,80,116,150,181,208,228,243,253,256
 };
 
 static const unsigned char font[37][7] = {
@@ -215,6 +230,66 @@ static Point project_half(int hx, int hy, int angle, int center_x, int center_y)
     return point;
 }
 
+static Point project_3d(const Point3 *world,int angle)
+{
+    Point point;
+    point.x=300+((long)cos_table[angle]*world->x-(long)sin_table[angle]*world->y)*30/65536L;
+    point.y=186+((long)sin_table[angle]*world->x+(long)cos_table[angle]*world->y)*12/65536L-
+            (long)world->z*18/256L;
+    return point;
+}
+
+static u8 cube_visible_mask(const Point3 *vertices,int angle)
+{
+    Point screen[8]; u8 mask=0; unsigned vertex,face;
+    for(vertex=0;vertex<8;++vertex) screen[vertex]=project_3d(&vertices[vertex],angle);
+    for(face=0;face<6;++face) {
+        long area=0; unsigned corner;
+        for(corner=0;corner<4;++corner) {
+            Point a=screen[cube_face_vertex[face][corner]];
+            Point b=screen[cube_face_vertex[face][(corner+1)&3]];
+            area+=(long)a.x*b.y-(long)a.y*b.x;
+        }
+        if(area>0) mask|=(u8)(1U<<face);
+    }
+    return mask;
+}
+
+static void init_cube_cache(void)
+{
+    unsigned vertex,direction,step,angle;
+    for(vertex=0;vertex<8;++vertex) {
+        rest_vertex[vertex].x=vertex&1 ? 256 : -256;
+        rest_vertex[vertex].y=vertex&2 ? 256 : -256;
+        rest_vertex[vertex].z=vertex&4 ? 512 : 0;
+    }
+    for(direction=0;direction<4;++direction) for(step=0;step<MOTION_STEPS;++step)
+        for(vertex=0;vertex<8;++vertex) {
+            Point3 point=rest_vertex[vertex]; int c=roll_cos[step],s=roll_sin[step];
+            int pivot,first,second;
+            if(direction==WORLD_EAST || direction==WORLD_WEST) {
+                pivot=direction==WORLD_EAST ? 256 : -256;
+                if(direction==WORLD_WEST) s=-s;
+                first=point.x-pivot; second=point.z;
+                point.x=pivot+((long)first*c+(long)second*s)/256L;
+                point.z=((long)-first*s+(long)second*c)/256L;
+            } else {
+                pivot=direction==WORLD_SOUTH ? 256 : -256;
+                if(direction==WORLD_SOUTH) s=-s;
+                first=point.y-pivot; second=point.z;
+                point.y=pivot+((long)first*c-(long)second*s)/256L;
+                point.z=((long)first*s+(long)second*c)/256L;
+            }
+            roll_vertex[direction][step][vertex]=point;
+        }
+    for(angle=0;angle<40;++angle) {
+        for(step=0;step<MOTION_STEPS;++step)
+            visible_face[angle][4][step]=cube_visible_mask(rest_vertex,angle);
+        for(direction=0;direction<4;++direction) for(step=0;step<MOTION_STEPS;++step)
+            visible_face[angle][direction][step]=cube_visible_mask(roll_vertex[direction][step],angle);
+    }
+}
+
 static void cell_points(unsigned x, unsigned y, int angle, Point *points)
 {
     unsigned index=y*BOARD_SIZE+x;
@@ -258,67 +333,82 @@ static void draw_ring_part(Point a,Point b,Point c,Point d,int offset)
     quad(a,b,c,d,7);
 }
 
-static void draw_outer_ring(int angle,unsigned drop_step)
+static void draw_outer_ring(int angle,unsigned drop_step,unsigned mask)
 {
-    draw_ring_part(field_vertex(0,0,angle),field_vertex(5,0,angle),
-                   field_vertex(4,1,angle),field_vertex(1,1,angle),drop_step*3);
-    draw_ring_part(field_vertex(5,0,angle),field_vertex(5,5,angle),
-                   field_vertex(4,4,angle),field_vertex(4,1,angle),drop_step*4);
-    draw_ring_part(field_vertex(5,5,angle),field_vertex(0,5,angle),
-                   field_vertex(1,4,angle),field_vertex(4,4,angle),drop_step*5);
-    draw_ring_part(field_vertex(0,5,angle),field_vertex(0,0,angle),
-                   field_vertex(1,1,angle),field_vertex(1,4,angle),drop_step*4);
-}
-
-static u8 visible_side(const CubeFaces *cube, int angle, bool right)
-{
-    unsigned view = ((unsigned)(angle + 5) / 10) & 3;
-    if (view == 0) return right ? cube->east : cube->south;
-    if (view == 1) return right ? cube->south : cube->west;
-    if (view == 2) return right ? cube->west : cube->north;
-    return right ? cube->north : cube->east;
+    if(mask&1) draw_ring_part(field_vertex(0,0,angle),field_vertex(5,0,angle),
+                             field_vertex(4,1,angle),field_vertex(1,1,angle),drop_step*3);
+    if(mask&2) draw_ring_part(field_vertex(5,0,angle),field_vertex(5,5,angle),
+                             field_vertex(4,4,angle),field_vertex(4,1,angle),drop_step*4);
+    if(mask&4) draw_ring_part(field_vertex(5,5,angle),field_vertex(0,5,angle),
+                             field_vertex(1,4,angle),field_vertex(4,4,angle),drop_step*5);
+    if(mask&8) draw_ring_part(field_vertex(0,5,angle),field_vertex(0,0,angle),
+                             field_vertex(1,1,angle),field_vertex(1,4,angle),drop_step*4);
 }
 
 static void draw_cube(const GameState *game, const Motion *motion, int angle)
 {
-    int hx = game->x*2-4, hy = game->y*2-4;
-    int lift = 0, lean_x = 0;
-    CubeFaces faces = game->cube;
-    Point center, top, right, bottom, left, top_peak, right_peak, left_peak;
-    if (motion->kind == MOTION_ROLL) {
-        lift = motion->step <= 5 ? motion->step : 10-motion->step;
-        lean_x = (motion->step-5)/2;
-        if (motion->step < 5) faces=motion->cube_before;
+    Point screen[8]; u8 face_color[6];
+    CubeFaces faces=motion->kind==MOTION_ROLL ? motion->cube_before : game->cube;
+    int center_x=(motion->kind==MOTION_ROLL ? motion->from_x : game->x)*512-1024;
+    int center_y=(motion->kind==MOTION_ROLL ? motion->from_y : game->y)*512-1024;
+    unsigned vertex,face,direction=4,step=0; const Point3 *geometry;
+    face_color[0]=faces.east; face_color[1]=faces.south;
+    face_color[2]=faces.west; face_color[3]=faces.north;
+    face_color[4]=faces.top; face_color[5]=faces.bottom;
+    if(motion->kind==MOTION_ROLL) {
+        direction=(unsigned)(((game->x-motion->from_x)>0) ? WORLD_EAST :
+            ((game->x-motion->from_x)<0) ? WORLD_WEST :
+            ((game->y-motion->from_y)>0) ? WORLD_SOUTH : WORLD_NORTH);
+        step=motion->step; geometry=roll_vertex[direction][step];
+    } else geometry=rest_vertex;
+    for(vertex=0;vertex<8;++vertex) {
+        Point3 point=geometry[vertex]; point.x+=center_x; point.y+=center_y;
+        screen[vertex]=project_3d(&point,angle);
     }
-    center=project_half(hx,hy,angle,300,186);
-    if (motion->kind == MOTION_ROLL) {
-        Point from=project_half(motion->from_x*2-4,motion->from_y*2-4,angle,300,186);
-        center.x=from.x+(center.x-from.x)*motion->step/MOTION_STEPS;
-        center.y=from.y+(center.y-from.y)*motion->step/MOTION_STEPS;
+    for(face=0;face<6;++face) {
+        if(visible_face[angle][direction][step]&(1U<<face)) {
+            Point p[4]; unsigned corner;
+            for(corner=0;corner<4;++corner) p[corner]=screen[cube_face_vertex[face][corner]];
+            quad(p[0],p[1],p[2],p[3],color_of(face_color[face]));
+        }
     }
-    center.y -= lift;
-    top.x=center.x+lean_x; top.y=center.y-22;
-    right.x=center.x+26; right.y=center.y-10;
-    bottom.x=center.x; bottom.y=center.y;
-    left.x=center.x-26; left.y=center.y-10;
-    top_peak.x=center.x+lean_x; top_peak.y=center.y-42;
-    right_peak.x=center.x+26+lean_x; right_peak.y=center.y-32;
-    left_peak.x=center.x-26+lean_x; left_peak.y=center.y-32;
-    quad(top_peak,right_peak,top,left_peak,color_of(faces.top));
-    quad(right_peak,right,bottom,top,color_of(visible_side(&faces,angle,true)));
-    quad(left_peak,top,bottom,left,color_of(visible_side(&faces,angle,false)));
 }
 
 static void draw_target(const GameState *game)
 {
     unsigned x,y;
-    text(500,16,"TARGET",15);
+    text(536,16,"TARGET",15);
     for (y=0;y<BOARD_SIZE;++y) for(x=0;x<BOARD_SIZE;++x) {
-        int left=508+(int)x*38, top=45+(int)y*27;
+        int left=536+(int)x*34, top=45+(int)y*27;
         unsigned char c=color_of(game->target[y*BOARD_SIZE+x]);
-        int row; for(row=0;row<23;++row) hline(left,left+33,top+row,c);
-        hline(left,left+33,top,0); hline(left,left+33,top+22,0);
+        int row; for(row=0;row<23;++row) hline(left,left+29,top+row,c);
+        hline(left,left+29,top,0); hline(left,left+29,top+22,0);
     }
+}
+
+static void roll_dirty_bounds(const GameState *game,const Motion *motion,int angle,
+                              int *x1,int *y1,int *x2,int *y2)
+{
+    Point from=project_half(motion->from_x*2-4,motion->from_y*2-4,angle,300,186);
+    Point to=project_half(game->x*2-4,game->y*2-4,angle,300,186);
+    *x1=(from.x<to.x ? from.x : to.x)-55; *x2=(from.x>to.x ? from.x : to.x)+55;
+    *y1=(from.y<to.y ? from.y : to.y)-60; *y2=(from.y>to.y ? from.y : to.y)+28;
+    if(*x1<80)*x1=80;if(*x2>519)*x2=519;
+    if(*y1<64)*y1=64;if(*y2>321)*y2=321;
+    *x1&=~7; *x2|=7;
+}
+
+static bool cell_intersects(unsigned index,int angle,int x1,int y1,int x2,int y2)
+{
+    Point *points=cell_cache[angle][index]; int min_x=points[0].x,max_x=points[0].x;
+    int min_y=points[0].y,max_y=points[0].y; unsigned corner;
+    for(corner=1;corner<4;++corner) {
+        if(points[corner].x<min_x)min_x=points[corner].x;
+        if(points[corner].x>max_x)max_x=points[corner].x;
+        if(points[corner].y<min_y)min_y=points[corner].y;
+        if(points[corner].y>max_y)max_y=points[corner].y;
+    }
+    return max_x>=x1 && min_x<=x2 && max_y>=y1 && min_y<=y2;
 }
 
 static void draw_number(int x,int y,unsigned value,unsigned char color)
@@ -336,7 +426,7 @@ bool video_init(void)
     outpw(0x3ce,0x0003);
     outpw(0x3ce,0x0001);
     outpw(0x3ce,0x0000);
-    init_cell_cache(); draw_page=PAGE_BYTES; display_page=0;
+    init_cell_cache(); init_cube_cache(); draw_page=PAGE_BYTES; display_page=0;
     cached_level[0]=-1; cached_level[1]=-1;
     clear_page(0); video_present(); clear_page(0); video_present();
     return true;
@@ -374,8 +464,15 @@ void video_render_game(const GameState *game,const Motion *motion)
 {
     u16 started; int angle=angle_for(game,motion); unsigned order[9],i,j;
     unsigned page=draw_page ? 1 : 0; bool fresh=cached_level[page]!=(signed char)game->level;
+    bool dirty_roll=!fresh && motion->kind==MOTION_ROLL; int dirty_x1=0,dirty_y1=0,dirty_x2=0,dirty_y2=0;
     started=platform_profile_read();
     if(fresh) clear_page(1);
+    else if(dirty_roll) {
+        roll_dirty_bounds(game,motion,angle,&dirty_x1,&dirty_y1,&dirty_x2,&dirty_y2);
+        clear_byte_rect((unsigned)dirty_x1>>3,(unsigned)dirty_y1,
+                        (unsigned)(dirty_x2-dirty_x1+1)>>3,
+                        (unsigned)(dirty_y2-dirty_y1+1),1);
+    }
     else {
         /* The rotating board and rolling cube never leave this byte-aligned box. */
         clear_byte_rect(10,64,55,258,1);
@@ -383,15 +480,31 @@ void video_render_game(const GameState *game,const Motion *motion)
     }
     if(profiling) profile.clear_ticks+=elapsed(started);
     started=platform_profile_read();
-    if(game->border_active || motion->drop_after_roll || motion->kind==MOTION_DROP)
-        draw_outer_ring(angle,motion->kind==MOTION_DROP ? motion->step : 0);
+    if(game->border_active || motion->drop_after_roll || motion->kind==MOTION_DROP) {
+        unsigned ring_mask=15;
+        if(dirty_roll) {
+            ring_mask=0;
+            if(motion->from_y==0 || game->y==0)ring_mask|=1;
+            if(motion->from_x==FIELD_SIZE-1 || game->x==FIELD_SIZE-1)ring_mask|=2;
+            if(motion->from_y==FIELD_SIZE-1 || game->y==FIELD_SIZE-1)ring_mask|=4;
+            if(motion->from_x==0 || game->x==0)ring_mask|=8;
+        }
+        draw_outer_ring(angle,motion->kind==MOTION_DROP ? motion->step : 0,ring_mask);
+    }
     for(i=0;i<9;++i) order[i]=i;
     for(i=1;i<9;++i) { unsigned value=order[i]; int depth=depth_cache[angle][value]; j=i;
         while(j>0) { int other=depth_cache[angle][order[j-1]];
             if(other<=depth) break; order[j]=order[j-1]; --j; }
         order[j]=value;
     }
-    for(i=0;i<9;++i) { unsigned index=order[i]; draw_cell(index%3,index/3,game->paint[index],angle); }
+    for(i=0;i<9;++i) {
+        unsigned index=order[i]; u8 paint=game->paint[index];
+        if(dirty_roll && !cell_intersects(index,angle,dirty_x1,dirty_y1,dirty_x2,dirty_y2)) continue;
+        if(motion->kind==MOTION_ROLL && game_is_inner(game->x,game->y) &&
+           index==(unsigned)(game->y-INNER_OFFSET)*BOARD_SIZE+(game->x-INNER_OFFSET))
+            paint=motion->destination_paint_before;
+        draw_cell(index%3,index/3,paint,angle);
+    }
     if(profiling) profile.board_ticks+=elapsed(started);
     started=platform_profile_read(); draw_cube(game,motion,angle);
     if(profiling) profile.cube_ticks+=elapsed(started);
@@ -452,5 +565,6 @@ bool video_write_ppm(const char *path)
         }
         if(fwrite(row,1,sizeof(row),file)!=sizeof(row)) { fclose(file); return false; }
     }
+    if(fflush(file)!=0) { fclose(file); return false; }
     fclose(file); outpw(0x3ce,0x0205); current_bit_mask=0; return true;
 }

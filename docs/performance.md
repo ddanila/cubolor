@@ -17,9 +17,9 @@ repeatable. The executable also remains compatible with 386-class CPUs; slower
 
 ## Gate
 
-`CUBOLOR.EXE -benchmark` renders 200 animated frames of the complete 5×5 field
-and its rotating outer ring. It turns
-off vertical synchronization, measures elapsed PIT channel 2 ticks at
+`CUBOLOR.EXE -benchmark` renders 200 animated frames, alternating between the
+complete 5×5 field with its rotating outer ring and a true edge-pivot cube
+roll. It turns off vertical synchronization, measures elapsed PIT channel 2 ticks at
 1,193,182 Hz, and reports both total throughput and stage counters. The shell
 gate rejects missing/zero counters and throughput below 50.0 FPS.
 
@@ -33,8 +33,8 @@ Recorded on 2026-08-24 with the pinned Open Watcom 2026-08-01 build and
 DOSBox-X 2025.02.01:
 
 ```text
-486DX-50 performance: PASS (57.8 fps at 10000 cycles; minimum 50.0)
-Profile ticks: clear=520375 board=2915727 cube=533982 hud=143718 present=1810
+486DX-50 performance: PASS (63.6 fps at 10000 cycles; minimum 50.0)
+Profile ticks: clear=319109 board=2382698 cube=896067 hud=141161 present=1802
 ```
 
 ## Hot-path safeguards
@@ -47,5 +47,6 @@ Profile ticks: clear=520375 board=2915727 cube=533982 hud=143718 present=1810
 - cached EGA bit-mask register state;
 - 386 `rep stosb` full spans and page clears;
 - fixed-point projection and edge walking;
+- precomputed rolling-cube vertices, face visibility, and dirty redraw bounds;
 - no dynamic allocation or asset decompression in the frame loop;
 - deterministic native and target-side tests in CI.
