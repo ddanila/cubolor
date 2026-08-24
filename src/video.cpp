@@ -16,7 +16,10 @@
 struct Point { int x, y; };
 struct Point3 { int x, y, z; };
 
-static unsigned char __far *vram = (unsigned char __far *)MK_FP(0xa000, 0);
+/* Reads load all four EGA latches before a masked write.  They must survive
+ * optimization even when the C value itself is discarded. */
+static volatile unsigned char __far *vram =
+    (volatile unsigned char __far *)MK_FP(0xa000, 0);
 static unsigned draw_page;
 static unsigned display_page;
 static bool profiling;
@@ -107,6 +110,16 @@ static void fill_run_386(unsigned offset, unsigned count, unsigned char color);
     "rep stosb" \
     parm [di] [cx] [al] modify [cx di dx es];
 
+/* The EGA bit mask preserves pixels from the internal latches.  A read from
+ * this exact byte must immediately precede its masked write. */
+static void masked_write(unsigned offset, unsigned char color);
+#pragma aux masked_write = \
+    "mov dx,0a000h" \
+    "mov es,dx" \
+    "mov ah,es:[di]" \
+    "mov es:[di],al" \
+    parm [di] [al] modify [ax dx es];
+
 static void hline(int x1, int x2, int y, unsigned char color)
 {
     unsigned offset, first, last;
@@ -122,16 +135,15 @@ static void hline(int x1, int x2, int y, unsigned char color)
     right_mask = (unsigned char)(0xff << (7 - (x2 & 7)));
     if (first == last) {
         set_bit_mask(left_mask & right_mask);
-        (void)vram[offset]; vram[offset] = color;
+        masked_write(offset,color);
     } else {
-        set_bit_mask(left_mask); (void)vram[offset]; vram[offset] = color;
+        set_bit_mask(left_mask); masked_write(offset,color);
         set_bit_mask(0xff);
         if (last > first + 1)
             fill_run_386(draw_page + (unsigned)y * PITCH + first + 1,
                          last - first - 1, color);
         set_bit_mask(right_mask);
-        (void)vram[draw_page + (unsigned)y * PITCH + last];
-        vram[draw_page + (unsigned)y * PITCH + last] = color;
+        masked_write(draw_page + (unsigned)y * PITCH + last,color);
     }
 }
 
@@ -191,23 +203,18 @@ static void text(int x, int y, const char *value, unsigned char color)
         if (*value != ' ') {
             unsigned index = glyph_index(*value); int row;
             for (row=0; row<7; ++row) {
-                unsigned bits=font[index][row],column; u32 expanded=0,pattern; int copy;
-                for(column=0;column<5;++column) {
-                    expanded<<=2;
-                    if(bits&(16U>>column)) expanded|=3;
-                }
-                pattern=expanded<<(22-((unsigned)x&7));
-                for(copy=0;copy<2;++copy) {
-                    unsigned offset=draw_page+(unsigned)(y+row*2+copy)*PITCH+((unsigned)x>>3);
-                    unsigned part;
-                    for(part=0;part<3;++part) {
-                        unsigned char mask=(unsigned char)(pattern>>(24-part*8));
-                        if(mask) { set_bit_mask(mask); (void)vram[offset+part]; vram[offset+part]=color; }
+                unsigned bits=font[index][row],column; int run=-1;
+                for(column=0;column<=5;++column) {
+                    bool set=column<5 && (bits&(16U>>column))!=0;
+                    if(set && run<0) run=(int)column;
+                    if(!set && run>=0) {
+                        hline(x+run,x+(int)column-1,y+row,color);
+                        run=-1;
                     }
                 }
             }
         }
-        x += 12; ++value;
+        x += 6; ++value;
     }
 }
 
@@ -377,7 +384,7 @@ static void draw_cube(const GameState *game, const Motion *motion, int angle)
 static void draw_target(const GameState *game)
 {
     unsigned x,y;
-    text(536,16,"TARGET",15);
+    text(567,16,"TARGET",15);
     for (y=0;y<BOARD_SIZE;++y) for(x=0;x<BOARD_SIZE;++x) {
         int left=536+(int)x*34, top=45+(int)y*27;
         unsigned char c=color_of(game->target[y*BOARD_SIZE+x]);
@@ -451,13 +458,13 @@ void video_render_title(void)
     int row; clear_page(1);
     cached_level[draw_page ? 1 : 0]=-1;
     for(row=0;row<60;++row) hline(72+row*2,568-row*2,36+row,13);
-    text(278,63,"CUBOLOR",15);
-    text(224,142,"ROLL PAINT MATCH",14);
-    text(194,166,"BORDER ROLLS ARE FREE",7);
-    text(206,190,"NUM 4 8 6 2  MOVE",11);
-    text(200,218,"NUM 7 1    TURN LEFT",10);
-    text(194,246,"NUM 9 3    TURN RIGHT",12);
-    text(254,304,"PRESS ENTER",15);
+    text(300,63,"CUBOLOR",15);
+    text(273,142,"ROLL PAINT MATCH",14);
+    text(258,166,"BORDER ROLLS ARE FREE",7);
+    text(263,190,"NUM 4 8 6 2  MOVE",11);
+    text(260,218,"NUM 7 1    TURN LEFT",10);
+    text(257,246,"NUM 9 3    TURN RIGHT",12);
+    text(288,304,"PRESS ENTER",15);
 }
 
 void video_render_game(const GameState *game,const Motion *motion)
@@ -510,13 +517,13 @@ void video_render_game(const GameState *game,const Motion *motion)
     if(profiling) profile.cube_ticks+=elapsed(started);
     started=platform_profile_read();
     if(fresh) {
-        text(16,16,"LEVEL",7); draw_number(82,16,game->level+1,15);
+        text(16,16,"LEVEL",7); draw_number(50,16,game->level+1,15);
         text(16,42,game_level_name(game->level),14);
         text(16,326,"MOVES",7);
         text(340,326,"U UNDO  R RESET",7); draw_target(game);
         cached_level[page]=(signed char)game->level;
     }
-    draw_number(82,326,game->moves,15);
+    draw_number(50,326,game->moves,15);
     if(profiling) { profile.hud_ticks+=elapsed(started); ++profile.frames; }
 }
 
@@ -524,8 +531,8 @@ void video_render_complete(const GameState *game)
 {
     Motion motion; memset(&motion,0,sizeof(motion)); video_render_game(game,&motion);
     { int row; for(row=0;row<68;++row) hline(92,508,126+row,0); }
-    text(204,143,"PICTURE COMPLETE",14);
-    text(254,172,"PRESS ENTER",15);
+    text(273,143,"PICTURE COMPLETE",14);
+    text(288,172,"PRESS ENTER",15);
 }
 
 void video_profile_enable(bool enabled) { profiling=enabled; }

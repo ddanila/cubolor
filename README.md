@@ -57,12 +57,13 @@ hosts are supported. `make dist` creates a ready-to-copy DOS directory.
 Gameplay is paced at 50 Hz by a restored-on-exit PIT interrupt. The benchmark
 disables vertical synchronization and profiles clear, board, cube, HUD, and
 page-flip stages separately. On the development profile, the MVP renders at
-63.6 raw FPS; see [performance.md](docs/performance.md) for the method and
+63.9 raw FPS; see [performance.md](docs/performance.md) for the method and
 latest recorded figures.
 
-Command-line diagnostics are `-selftest`, `-benchmark`, `-capture`, and
-`-capture-roll`. The capture commands write `CUBOLOR.PPM`; the latter records
-the cube halfway through an edge-pivoted roll.
+Command-line diagnostics are `-selftest`, `-benchmark`, `-capture`,
+`-capture-roll`, and `-capture-title`. The capture commands write
+`CUBOLOR.PPM`; the roll variant records the cube halfway through an
+edge-pivoted roll.
 
 ## Credits
 

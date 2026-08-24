@@ -66,7 +66,7 @@ static int benchmark(void)
     return 0;
 }
 
-static int capture(bool rolling)
+static int capture(bool rolling,bool title)
 {
     GameState game; Motion motion=no_motion(); bool ok;
     game_start(&game,rolling ? 0 : 3); game.view=rolling ? 0 : 1;
@@ -76,7 +76,8 @@ static int capture(bool rolling)
         motion.from_x=game.x; motion.from_y=game.y; motion.cube_before=game.cube;
         game_move(&game,WORLD_EAST); motion.drop_after_roll=1;
     }
-    video_render_game(&game,&motion); video_present(); ok=video_write_ppm("CUBOLOR.PPM");
+    if(title) video_render_title(); else video_render_game(&game,&motion);
+    video_present(); ok=video_write_ppm("CUBOLOR.PPM");
     video_shutdown(); puts(ok?"CUBOLOR CAPTURE PASS":"CUBOLOR CAPTURE FAIL");
     fflush(stdout); return ok?0:1;
 }
@@ -104,8 +105,9 @@ int main(int argc,char **argv)
     GameState game; Motion motion=no_motion(); bool running=true; bool title=true;
     if(argc>1 && strcmp(argv[1],"-selftest")==0) return selftest();
     if(argc>1 && strcmp(argv[1],"-benchmark")==0) return benchmark();
-    if(argc>1 && strcmp(argv[1],"-capture")==0) return capture(false);
-    if(argc>1 && strcmp(argv[1],"-capture-roll")==0) return capture(true);
+    if(argc>1 && strcmp(argv[1],"-capture")==0) return capture(false,false);
+    if(argc>1 && strcmp(argv[1],"-capture-roll")==0) return capture(true,false);
+    if(argc>1 && strcmp(argv[1],"-capture-title")==0) return capture(false,true);
     game_start(&game,0);
     if(!platform_install()) { puts("CUBOLOR: keyboard/timer install failed"); return 1; }
     if(!video_init()) {
