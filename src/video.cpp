@@ -15,15 +15,15 @@
 #define SCREEN_H 350
 #define PITCH 80
 #define PAGE_BYTES 28000
-#define OUTLINE_X 80
 #define OUTLINE_Y 64
-#define OUTLINE_W 440
 #define OUTLINE_BYTE_X 10
 #define OUTLINE_BYTE_W 55
 #define OUTLINE_H 286
+#define OUTLINE_BYTE_MAX 4096
 
 struct Point { int x, y; };
 struct Point3 { int x, y, z; };
+struct OutlineByte { u16 offset,next; };
 
 /* Reads load all four EGA latches before a masked write.  They must survive
  * optimization even when the C value itself is discarded. */
@@ -43,7 +43,11 @@ static short depth_cache[40][CELL_COUNT];
 static Point3 roll_vertex[4][MOTION_STEPS][8];
 static Point3 rest_vertex[8];
 static u8 visible_face[40][5][MOTION_STEPS];
+static OutlineByte __far outline_byte[OUTLINE_BYTE_MAX];
 static u8 __far outline_mask[OUTLINE_BYTE_W*OUTLINE_H];
+static unsigned outline_byte_count;
+static u16 outline_head[256];
+static bool sparse_wireframe;
 
 static const u8 cube_face_vertex[6][4] = {
     {1,3,7,5}, {2,6,7,3}, {0,4,6,2},
@@ -132,9 +136,35 @@ static void masked_write(unsigned offset, unsigned char color);
     "mov es:[di],al" \
     parm [di] [al] modify [ax dx es];
 
+static void apply_outline_bucket(unsigned page,const OutlineByte __far *bytes,unsigned first);
+/* Every byte in a bucket shares the EGA bit mask selected by the caller.
+ * Write mode 2 plus color zero clears that mask in all four enabled planes. */
+#pragma aux apply_outline_bucket = \
+    "push ds" \
+    "push bp" \
+    "mov ds,dx" \
+    "mov ax,0a000h" \
+    "mov es,ax" \
+    "mov dx,di" \
+    "mov bp,si" \
+    "bucket_loop:" \
+    "mov si,bx" \
+    "shl si,1" \
+    "shl si,1" \
+    "add si,bp" \
+    "mov di,[si]" \
+    "add di,dx" \
+    "mov al,es:[di]" \
+    "xor al,al" \
+    "mov es:[di],al" \
+    "mov bx,[si+2]" \
+    "cmp bx,0ffffh" \
+    "jne bucket_loop" \
+    "pop bp" \
+    "pop ds" \
+    parm [di] [dx si] [bx] modify [ax bx dx di si es];
+
 static void apply_outline_plane(unsigned page,const u8 __far *mask);
-/* Scan the far-memory 1-bit outline mask once per EGA plane.  Keeping ES and
- * DS loaded for the complete rectangle avoids per-pixel port writes. */
 #pragma aux apply_outline_plane = \
     "push ds" \
     "mov ds,dx" \
@@ -142,20 +172,20 @@ static void apply_outline_plane(unsigned page,const u8 __far *mask);
     "mov es,ax" \
     "add di,5130" \
     "mov bx,286" \
-    "row_loop:" \
+    "outline_row_loop:" \
     "mov cx,55" \
-    "byte_loop:" \
+    "outline_byte_loop:" \
     "lodsb" \
     "or al,al" \
-    "jz short skip_byte" \
+    "jz short outline_skip_byte" \
     "not al" \
     "and es:[di],al" \
-    "skip_byte:" \
+    "outline_skip_byte:" \
     "inc di" \
-    "loop byte_loop" \
+    "loop outline_byte_loop" \
     "add di,25" \
     "dec bx" \
-    "jnz row_loop" \
+    "jnz outline_row_loop" \
     "pop ds" \
     parm [di] [dx si] modify [ax bx cx di si es];
 
@@ -435,22 +465,40 @@ static bool ring_side_intersects(unsigned side,int angle,int x1,int y1,int x2,in
     return max_x>=x1 && min_x<=x2 && max_y>=y1 && min_y<=y2;
 }
 
+static void add_outline_byte(unsigned offset,unsigned char draw_mask)
+{
+    OutlineByte __far *item;
+    if(!draw_mask)return;
+    if(!sparse_wireframe) {
+        unsigned y=offset/PITCH,byte=offset%PITCH;
+        if(y>=OUTLINE_Y && y<OUTLINE_Y+OUTLINE_H &&
+           byte>=OUTLINE_BYTE_X && byte<OUTLINE_BYTE_X+OUTLINE_BYTE_W)
+            outline_mask[(y-OUTLINE_Y)*OUTLINE_BYTE_W+byte-OUTLINE_BYTE_X]|=draw_mask;
+        return;
+    }
+    if(outline_byte_count>=OUTLINE_BYTE_MAX)return;
+    item=&outline_byte[outline_byte_count++];
+    item->offset=(u16)offset;
+    item->next=outline_head[draw_mask];
+    outline_head[draw_mask]=(u16)(outline_byte_count-1);
+}
+
 static void outline_span(int x1,int x2,int y,int clip_x1,int clip_y1,int clip_x2,int clip_y2)
 {
     if(y<clip_y1 || y>clip_y2 || x2<clip_x1 || x1>clip_x2)return;
     if(x1<clip_x1)x1=clip_x1;if(x2>clip_x2)x2=clip_x2;
-    if(y<OUTLINE_Y || y>=OUTLINE_Y+OUTLINE_H || x2<OUTLINE_X || x1>=OUTLINE_X+OUTLINE_W)return;
-    if(x1<OUTLINE_X)x1=OUTLINE_X;if(x2>=OUTLINE_X+OUTLINE_W)x2=OUTLINE_X+OUTLINE_W-1;
+    if(y<0 || y>=SCREEN_H || x2<0 || x1>=SCREEN_W)return;
+    if(x1<0)x1=0;if(x2>=SCREEN_W)x2=SCREEN_W-1;
     {
         unsigned first=(unsigned)x1>>3,last=(unsigned)x2>>3;
-        unsigned row=(unsigned)(y-OUTLINE_Y)*OUTLINE_BYTE_W;
+        unsigned row=(unsigned)y*PITCH;
         unsigned char left=(unsigned char)(0xff>>(x1&7));
         unsigned char right=(unsigned char)(0xff<<(7-(x2&7)));
-        if(first==last)outline_mask[row+first-OUTLINE_BYTE_X]|=left&right;
+        if(first==last)add_outline_byte(row+first,(u8)(left&right));
         else {
-            unsigned byte;outline_mask[row+first-OUTLINE_BYTE_X]|=left;
-            for(byte=first+1;byte<last;++byte)outline_mask[row+byte-OUTLINE_BYTE_X]=0xff;
-            outline_mask[row+last-OUTLINE_BYTE_X]|=right;
+            unsigned byte;add_outline_byte(row+first,left);
+            for(byte=first+1;byte<last;++byte)add_outline_byte(row+byte,0xff);
+            add_outline_byte(row+last,right);
         }
     }
 }
@@ -477,7 +525,6 @@ static void field_wireframe(const GameState *game,const Motion *motion,int angle
                             int x1,int y1,int x2,int y2)
 {
     unsigned i;bool whole=game->border_active || motion->drop_after_roll;
-    if(motion->kind==MOTION_TURN)return;
     if(motion->kind==MOTION_DROP) {
         unsigned side;
         for(i=1;i<=4;++i) {
@@ -521,11 +568,20 @@ static void draw_cube(const GameState *game, const Motion *motion, int angle)
         if(visible_face[angle][direction][step]&(1U<<face)) {
             Point p[4]; unsigned corner;
             for(corner=0;corner<4;++corner) p[corner]=screen[cube_face_vertex[face][corner]];
-            if(motion->kind==MOTION_TURN)
-                quad(p[0],p[1],p[2],p[3],color_of(face_color[face]));
-            else outlined_quad(p,color_of(face_color[face]));
+            outlined_quad(p,color_of(face_color[face]));
         }
     }
+}
+
+static void flush_sparse_wireframe(void)
+{
+    unsigned mask;
+    if(!outline_byte_count)return;
+    for(mask=1;mask<256;++mask)if(outline_head[mask]!=0xffffU) {
+        set_bit_mask((u8)mask);
+        apply_outline_bucket(draw_page,outline_byte,outline_head[mask]);
+    }
+    set_bit_mask(0xff);
 }
 
 static void flush_mask_wireframe(void)
@@ -543,16 +599,20 @@ static void flush_mask_wireframe(void)
 
 static void reset_wireframe(void)
 {
-    _fmemset(outline_mask,0,sizeof(outline_mask));
+    outline_byte_count=0;
+    if(sparse_wireframe)_fmemset(outline_head,0xff,sizeof(outline_head));
+    else _fmemset(outline_mask,0,sizeof(outline_mask));
 }
 
 static void draw_field_wireframe(const GameState *game,const Motion *motion,int angle,
                                  bool dirty,int x1,int y1,int x2,int y2)
 {
+    sparse_wireframe=motion->kind==MOTION_TURN;
     reset_wireframe();
     field_wireframe(game,motion,angle,
                     dirty?x1:0,dirty?y1:0,dirty?x2:SCREEN_W-1,dirty?y2:SCREEN_H-1);
-    flush_mask_wireframe();
+    if(sparse_wireframe)flush_sparse_wireframe();
+    else flush_mask_wireframe();
 }
 
 

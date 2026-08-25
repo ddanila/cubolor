@@ -31,7 +31,14 @@ static int selftest(void)
         checksum^=video_page_checksum();
     }
     motion=no_motion(); video_render_game(&game,&motion); video_present();
-    checksum^=video_page_checksum(); video_shutdown();
+    checksum^=video_page_checksum();
+    motion.kind=MOTION_TURN;motion.view_from=game.view;motion.turn_delta=1;
+    game.view=(u8)((game.view+1)&3);
+    for(frame=0;frame<MOTION_STEPS;++frame) {
+        motion.step=(u8)frame;video_render_game(&game,&motion);video_present();
+        checksum^=video_page_checksum();
+    }
+    video_shutdown();
     if(checksum==0) { puts("CUBOLOR SELFTEST FAIL"); return 1; }
     printf("CUBOLOR SELFTEST PASS CRC=%08lX\n",checksum);
     return 0;
@@ -70,7 +77,7 @@ static int benchmark(void)
     return 0;
 }
 
-static int capture(bool rolling,bool title)
+static int capture(bool rolling,bool turning,bool title)
 {
     GameState game; Motion motion=no_motion(); bool ok; unsigned frame;
     game_start(&game,rolling ? 0 : 3); game.view=rolling ? 0 : 1;
@@ -80,8 +87,11 @@ static int capture(bool rolling,bool title)
         motion.from_x=game.x; motion.from_y=game.y; motion.cube_before=game.cube;
         game_move(&game,WORLD_EAST); motion.drop_after_roll=1;
     }
+    if(turning) {
+        motion.kind=MOTION_TURN; motion.view_from=0; motion.turn_delta=1;
+    }
     if(title) { video_render_title(); video_present(); }
-    else if(rolling) {
+    else if(rolling || turning) {
         for(frame=0;frame<=5;++frame) {
             motion.step=(u8)frame; video_render_game(&game,&motion); video_present();
         }
@@ -114,9 +124,10 @@ int main(int argc,char **argv)
     GameState game; Motion motion=no_motion(); bool running=true; bool title=true;
     if(argc>1 && strcmp(argv[1],"-selftest")==0) return selftest();
     if(argc>1 && strcmp(argv[1],"-benchmark")==0) return benchmark();
-    if(argc>1 && strcmp(argv[1],"-capture")==0) return capture(false,false);
-    if(argc>1 && strcmp(argv[1],"-capture-roll")==0) return capture(true,false);
-    if(argc>1 && strcmp(argv[1],"-capture-title")==0) return capture(false,true);
+    if(argc>1 && strcmp(argv[1],"-capture")==0) return capture(false,false,false);
+    if(argc>1 && strcmp(argv[1],"-capture-roll")==0) return capture(true,false,false);
+    if(argc>1 && strcmp(argv[1],"-capture-turn")==0) return capture(false,true,false);
+    if(argc>1 && strcmp(argv[1],"-capture-title")==0) return capture(false,false,true);
     game_start(&game,0);
     if(!platform_install()) { puts("CUBOLOR: keyboard/timer install failed"); return 1; }
     if(!video_init()) {

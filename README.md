@@ -30,9 +30,8 @@ contains six hand-authored, provably reachable 3×3 target pictures. Border
 movement neither paints nor increases the move counter. Undoing across the
 first inward roll restores the ring.
 
-Black one-pixel outlines separate the field cells and visible cube faces. To
-protect the 486 frame budget, internal field lines are restored when a camera
-quarter-turn lands; cube-roll animation keeps the complete grid visible.
+Black one-pixel outlines separate the field cells and visible cube faces. They
+remain visible throughout both cube rolls and animated camera quarter-turns.
 
 ## Build and test
 
@@ -61,13 +60,13 @@ hosts are supported. `make dist` creates a ready-to-copy DOS directory.
 Gameplay is paced at 50 Hz by a restored-on-exit PIT interrupt. The benchmark
 disables vertical synchronization and profiles clear, board, cube, HUD, and
 page-flip stages separately. On the development profile, the MVP renders at
-66.9 raw FPS; see [performance.md](docs/performance.md) for the method and
+52.5 raw FPS; see [performance.md](docs/performance.md) for the method and
 latest recorded figures.
 
 Command-line diagnostics are `-selftest`, `-benchmark`, `-capture`,
-`-capture-roll`, and `-capture-title`. The capture commands write
-`CUBOLOR.PPM`; the roll variant records the cube halfway through an
-edge-pivoted roll.
+`-capture-roll`, `-capture-turn`, and `-capture-title`. The capture commands
+write `CUBOLOR.PPM`; the animation variants record the cube or field halfway
+through an edge-pivoted roll or camera turn.
 
 ## Credits
 
