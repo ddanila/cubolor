@@ -729,9 +729,9 @@ void video_render_title(void)
     text(300,63,"CUBOLOR",15);
     text(273,142,"ROLL PAINT MATCH",14);
     text(258,166,"BORDER ROLLS ARE FREE",7);
-    text(263,190,"NUM 4 8 6 2  MOVE",11);
-    text(260,218,"NUM 7 1    TURN LEFT",10);
-    text(257,246,"NUM 9 3    TURN RIGHT",12);
+    text(263,190,"NUM 7 9 1 3  ROLL",11);
+    text(263,218,"NUM 4 6    TURN 90",10);
+    text(260,246,"NUM 8 2    TURN 180",12);
     text(288,304,"PRESS ENTER",15);
 }
 

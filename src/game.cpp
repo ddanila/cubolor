@@ -128,9 +128,10 @@ void game_start(GameState *game, unsigned level)
 
 WorldDirection game_screen_to_world(unsigned screen_direction, unsigned view)
 {
-    /* At view zero, north is screen-up. A clockwise camera quarter turn means
-     * screen-up points one world quarter turn clockwise as well. */
-    return (WorldDirection)((screen_direction + view) & 3);
+    /* At view zero the projected axes are W, N, E, S at numpad 7, 9, 3, 1.
+     * Increasing the camera angle rotates that mapping counter-clockwise in
+     * world space, keeping every key fixed to its visible diagonal. */
+    return (WorldDirection)((screen_direction + 3U - view) & 3);
 }
 
 bool game_can_move(const GameState *game, WorldDirection direction)

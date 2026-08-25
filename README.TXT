@@ -10,14 +10,14 @@ REQUIREMENTS
   386 or newer PC, 256 KiB EGA graphics, MS-DOS compatible operating system.
 
 CONTROLS
-  Numeric keypad 4 8 6 2  Roll in the screen direction
-  Numeric keypad 7 or 1   Turn the view left
-  Numeric keypad 9 or 3   Turn the view right
+  Numeric keypad 7 9 1 3  Roll on the matching screen diagonal
+  Numeric keypad 4 or 6   Turn the field 90 degrees left or right
+  Numeric keypad 8 or 2   Turn the field 180 degrees CCW or CW
   U                       Undo
   R                       Restart puzzle
   Esc                     Quit to DOS
 
-Movement remains relative to the screen after turning the view. There are
+Movement remains relative to the screen after turning the field. There are
 six 3x3 target pictures. Undoing the first inward roll restores the ring.
 The game runs at 50 frames per second when hardware permits.
 

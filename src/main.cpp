@@ -30,6 +30,12 @@ static int selftest(void)
         motion.step=(u8)frame;video_render_game(&game,&motion);video_present();
         checksum^=video_page_checksum();
     }
+    motion.kind=MOTION_TURN;motion.view_from=game.view;motion.turn_delta=2;
+    game.view=(u8)((game.view+2)&3);
+    for(frame=0;frame<MOTION_STEPS;++frame) {
+        motion.step=(u8)frame;video_render_game(&game,&motion);video_present();
+        checksum^=video_page_checksum();
+    }
     motion=no_motion(); video_render_game(&game,&motion); video_present();
     checksum^=video_page_checksum();
     motion.kind=MOTION_TURN;motion.view_from=game.view;motion.turn_delta=1;
@@ -62,7 +68,8 @@ static int benchmark(void)
             motion.kind=MOTION_ROLL; motion.drop_after_roll=1;
             video_render_game(&rolling_game,&motion);
         } else {
-            motion.kind=MOTION_TURN; motion.view_from=0; motion.turn_delta=1;
+            motion.kind=MOTION_TURN; motion.view_from=0;
+            motion.turn_delta=(signed char)((frame&2)?2:1);
             motion.drop_after_roll=0; video_render_game(&game,&motion);
         }
         video_present();
@@ -119,6 +126,13 @@ static void begin_roll(GameState *game,Motion *motion,ScreenDirection direction)
     motion->drop_after_roll=(u8)(border_was_active && !game->border_active);
 }
 
+static void begin_turn(GameState *game,Motion *motion,signed char delta)
+{
+    motion->kind=MOTION_TURN;motion->view_from=game->view;
+    motion->turn_delta=delta;motion->step=0;
+    game->view=(u8)((game->view+delta+4)&3);
+}
+
 int main(int argc,char **argv)
 {
     GameState game; Motion motion=no_motion(); bool running=true; bool title=true;
@@ -153,17 +167,15 @@ int main(int argc,char **argv)
                     } else motion=no_motion();
                 }
             } else {
-                if(key_pressed(KEY_NUM_4)) begin_roll(&game,&motion,SCREEN_LEFT);
-                else if(key_pressed(KEY_NUM_8)) begin_roll(&game,&motion,SCREEN_UP);
-                else if(key_pressed(KEY_NUM_6)) begin_roll(&game,&motion,SCREEN_RIGHT);
-                else if(key_pressed(KEY_NUM_2)) begin_roll(&game,&motion,SCREEN_DOWN);
-                else if(key_pressed(KEY_NUM_7)||key_pressed(KEY_NUM_1)) {
-                    motion.kind=MOTION_TURN; motion.view_from=game.view; motion.turn_delta=-1; motion.step=0;
-                    game.view=(u8)((game.view+3)&3);
-                } else if(key_pressed(KEY_NUM_9)||key_pressed(KEY_NUM_3)) {
-                    motion.kind=MOTION_TURN; motion.view_from=game.view; motion.turn_delta=1; motion.step=0;
-                    game.view=(u8)((game.view+1)&3);
-                } else if(key_pressed(KEY_U)) game_undo(&game);
+                if(key_pressed(KEY_NUM_7)) begin_roll(&game,&motion,SCREEN_UP_LEFT);
+                else if(key_pressed(KEY_NUM_9)) begin_roll(&game,&motion,SCREEN_UP_RIGHT);
+                else if(key_pressed(KEY_NUM_3)) begin_roll(&game,&motion,SCREEN_DOWN_RIGHT);
+                else if(key_pressed(KEY_NUM_1)) begin_roll(&game,&motion,SCREEN_DOWN_LEFT);
+                else if(key_pressed(KEY_NUM_4)) begin_turn(&game,&motion,-1);
+                else if(key_pressed(KEY_NUM_6)) begin_turn(&game,&motion,1);
+                else if(key_pressed(KEY_NUM_8)) begin_turn(&game,&motion,-2);
+                else if(key_pressed(KEY_NUM_2)) begin_turn(&game,&motion,2);
+                else if(key_pressed(KEY_U)) game_undo(&game);
                 else if(key_pressed(KEY_R)) { unsigned view=game.view; game_start(&game,game.level); game.view=(u8)view; }
                 else if(key_pressed(KEY_ESCAPE)) running=false;
             }

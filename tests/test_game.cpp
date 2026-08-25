@@ -20,11 +20,15 @@ static WorldDirection direction(char c)
 int main(void)
 {
     GameState game;
-    unsigned level;
-    assert(game_screen_to_world(SCREEN_UP, 0) == WORLD_NORTH);
-    assert(game_screen_to_world(SCREEN_LEFT, 1) == WORLD_NORTH);
-    assert(game_screen_to_world(SCREEN_DOWN, 2) == WORLD_NORTH);
-    assert(game_screen_to_world(SCREEN_RIGHT, 3) == WORLD_NORTH);
+    unsigned level,view,screen;
+    static const WorldDirection expected[4][4] = {
+        {WORLD_WEST,WORLD_NORTH,WORLD_EAST,WORLD_SOUTH},
+        {WORLD_SOUTH,WORLD_WEST,WORLD_NORTH,WORLD_EAST},
+        {WORLD_EAST,WORLD_SOUTH,WORLD_WEST,WORLD_NORTH},
+        {WORLD_NORTH,WORLD_EAST,WORLD_SOUTH,WORLD_WEST}
+    };
+    for(view=0;view<4;++view)for(screen=0;screen<4;++screen)
+        assert(game_screen_to_world(screen,view)==expected[view][screen]);
 
     game_start(&game,0);
     assert(game.border_active);

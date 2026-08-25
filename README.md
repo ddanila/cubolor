@@ -17,15 +17,17 @@ guest image is displayed in a 640×480 viewport rather than with square pixels.
 
 ## Playing
 
-- Numpad `4`, `8`, `6`, `2`: roll left, up, right, or down as seen on screen
-- Numpad `7` or `1`: rotate the view 90 degrees counter-clockwise
-- Numpad `9` or `3`: rotate the view 90 degrees clockwise
+- Numpad `7`, `9`, `1`, `3`: roll up-left, up-right, down-left, or down-right
+  exactly as seen on screen
+- Numpad `4` or `6`: rotate the field 90 degrees left or right
+- Numpad `8` or `2`: rotate the field 180 degrees counter-clockwise or clockwise
 - `U`: undo
 - `R`: restart the current puzzle
 - `Esc`: quit to DOS
 
-Movement stays camera-relative after a view rotation. Both cube rolls and view
-turns animate over ten 50 Hz frames instead of jumping between states. The MVP
+Movement keys keep their visible numpad directions after a field rotation; the
+world direction is recalculated for the current view on every roll. Both cube
+rolls and field turns animate over ten 50 Hz frames instead of jumping. The MVP
 contains six hand-authored, provably reachable 3×3 target pictures. Border
 movement neither paints nor increases the move counter. Undoing across the
 first inward roll restores the ring.
@@ -61,7 +63,7 @@ hosts are supported. `make dist` creates a ready-to-copy DOS directory.
 Gameplay is paced at 50 Hz by a restored-on-exit PIT interrupt. The benchmark
 disables vertical synchronization and profiles clear, board, cube, HUD, and
 page-flip stages separately. On the development profile, the MVP renders at
-57.2 raw FPS; see [performance.md](docs/performance.md) for the method and
+56.8 raw FPS; see [performance.md](docs/performance.md) for the method and
 latest recorded figures.
 
 Command-line diagnostics are `-selftest`, `-benchmark`, `-capture`,

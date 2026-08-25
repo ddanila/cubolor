@@ -34,10 +34,10 @@ enum WorldDirection {
 };
 
 enum ScreenDirection {
-    SCREEN_UP = 0,
-    SCREEN_RIGHT = 1,
-    SCREEN_DOWN = 2,
-    SCREEN_LEFT = 3
+    SCREEN_UP_LEFT = 0,
+    SCREEN_UP_RIGHT = 1,
+    SCREEN_DOWN_RIGHT = 2,
+    SCREEN_DOWN_LEFT = 3
 };
 
 struct CubeFaces {
