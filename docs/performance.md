@@ -33,8 +33,8 @@ Recorded on 2026-08-25 with the pinned Open Watcom 2026-08-01 build and
 DOSBox-X 2026.01.02:
 
 ```text
-486DX-50 performance: PASS (52.5 fps at 10000 cycles; minimum 50.0)
-Profile ticks: clear=342157 board=4190486 cube=1737209 hud=289016 present=1806
+486DX-50 performance: PASS (57.2 fps at 10000 cycles; minimum 50.0)
+Profile ticks: clear=342174 board=3727835 cube=1492490 hud=627246 present=1802
 ```
 
 ## Hot-path safeguards
@@ -44,13 +44,14 @@ Profile ticks: clear=342157 board=4190486 cube=1737209 hud=289016 present=1806
   EGA memory and port I/O;
 - two 28,000-byte pages and byte-addressed CRTC page flips on 256 KiB EGA;
 - per-page static HUD and target caches;
-- precomputed projection and depth tables for all 40 animation angles;
+- precomputed board, target, and depth tables for all 40 animation angles;
 - write-mode-2 color expansion;
 - cached EGA bit-mask register state;
 - explicit same-address latch read before every masked endpoint write;
 - native one-pixel 5×7 HUD glyphs;
 - 386 `rep stosb` full spans and page clears;
 - fixed-point projection and edge walking;
+- single-instruction 386 `shrd` conversion for positive 24.8 raster x values;
 - precomputed rolling-cube vertices, face visibility, and dirty redraw bounds;
 - geometry-derived outer-platform dirty masks and clipped polygon spans;
 - hybrid black-outline compositor: plane-scanned far mask for clipped rolls,

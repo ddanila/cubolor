@@ -32,6 +32,7 @@ first inward roll restores the ring.
 
 Black one-pixel outlines separate the field cells and visible cube faces. They
 remain visible throughout both cube rolls and animated camera quarter-turns.
+The target is shown as a miniature isometric field and turns with the camera.
 
 ## Build and test
 
@@ -60,7 +61,7 @@ hosts are supported. `make dist` creates a ready-to-copy DOS directory.
 Gameplay is paced at 50 Hz by a restored-on-exit PIT interrupt. The benchmark
 disables vertical synchronization and profiles clear, board, cube, HUD, and
 page-flip stages separately. On the development profile, the MVP renders at
-52.5 raw FPS; see [performance.md](docs/performance.md) for the method and
+57.2 raw FPS; see [performance.md](docs/performance.md) for the method and
 latest recorded figures.
 
 Command-line diagnostics are `-selftest`, `-benchmark`, `-capture`,

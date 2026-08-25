@@ -38,7 +38,9 @@ static int quad_clip_x1,quad_clip_y1,quad_clip_x2,quad_clip_y2;
 static VideoProfile profile;
 static unsigned char current_bit_mask = 0;
 static signed char cached_level[2] = {-1,-1};
+static signed char cached_target_angle[2] = {-1,-1};
 static Point cell_cache[40][CELL_COUNT][4];
+static Point target_vertex_cache[40][16];
 static short depth_cache[40][CELL_COUNT];
 static Point3 roll_vertex[4][MOTION_STEPS][8];
 static Point3 rest_vertex[8];
@@ -95,6 +97,13 @@ static const unsigned char font[37][7] = {
 };
 
 static u32 elapsed(u16 start) { return (u16)(start - platform_profile_read()); }
+
+/* Polygon screen x is non-negative; extract its 24.8 integer part without
+ * Open Watcom's signed-long division helper. */
+static int fixed8_integer(long value);
+#pragma aux fixed8_integer = \
+    "shrd ax,dx,8" \
+    parm [dx ax] value [ax] modify exact [ax];
 
 static void set_mode(unsigned mode)
 {
@@ -247,7 +256,7 @@ static void quad(Point a, Point b, Point c, Point d, unsigned char color)
         x=(long)p1.x*256L;
         step=(long)(p2.x-p1.x)*256L/(p2.y-p1.y);
         for(y=p1.y;y<p2.y;++y) {
-            int row=y-min_y,xi=(int)(x/256L);
+            int row=y-min_y,xi=fixed8_integer(x);
             if(row>=0 && row<height) {
                 if(xi<left[row]) left[row]=xi;
                 if(xi>right[row]) right[row]=xi;
@@ -407,6 +416,12 @@ static void init_cell_cache(void)
         points[2]=project_half((int)x*2-1,(int)y*2-1,angle,300,186);
         points[3]=project_half((int)x*2-3,(int)y*2-1,angle,300,186);
         depth_cache[angle][index]=(short)(points[0].y+points[2].y);
+    }
+    for(angle=0;angle<40;++angle)for(y=0;y<=BOARD_SIZE;++y)for(x=0;x<=BOARD_SIZE;++x) {
+        int hx=(int)x*2-3,hy=(int)y*2-3;
+        Point *point=&target_vertex_cache[angle][y*4+x];
+        point->x=585+((long)cos_table[angle]*hx-(long)sin_table[angle]*hy)*9/256;
+        point->y=78+((long)sin_table[angle]*hx+(long)cos_table[angle]*hy)*4/256;
     }
 }
 
@@ -616,15 +631,32 @@ static void draw_field_wireframe(const GameState *game,const Motion *motion,int 
 }
 
 
-static void draw_target(const GameState *game)
+static Point target_vertex(unsigned x,unsigned y,int angle)
 {
-    unsigned x,y;
-    text(567,16,"TARGET",15);
+    return target_vertex_cache[angle][y*4+x];
+}
+
+static void draw_target(const GameState *game,int angle)
+{
+    unsigned x,y;Point base[4];
+    base[0]=target_vertex(0,0,angle);base[1]=target_vertex(BOARD_SIZE,0,angle);
+    base[2]=target_vertex(BOARD_SIZE,BOARD_SIZE,angle);base[3]=target_vertex(0,BOARD_SIZE,angle);
+    quad(base[0],base[1],base[2],base[3],0);
     for (y=0;y<BOARD_SIZE;++y) for(x=0;x<BOARD_SIZE;++x) {
-        int left=536+(int)x*34, top=45+(int)y*27;
-        unsigned char c=color_of(game->target[y*BOARD_SIZE+x]);
-        int row; for(row=0;row<23;++row) hline(left,left+29,top+row,c);
-        hline(left,left+29,top,0); hline(left,left+29,top+22,0);
+        Point p[4];unsigned char c=color_of(game->target[y*BOARD_SIZE+x]);
+        p[0]=target_vertex(x,y,angle);p[1]=target_vertex(x+1,y,angle);
+        p[2]=target_vertex(x+1,y+1,angle);p[3]=target_vertex(x,y+1,angle);
+        inset_quad(p);
+        quad(p[0],p[1],p[2],p[3],c);
+    }
+}
+
+static void update_target(const GameState *game,int angle,unsigned page,bool fresh)
+{
+    if(fresh || cached_target_angle[page]!=(signed char)angle) {
+        if(!fresh)clear_byte_rect(68,59,10,39,1);
+        draw_target(game,angle);
+        cached_target_angle[page]=(signed char)angle;
     }
 }
 
@@ -670,6 +702,7 @@ bool video_init(void)
     outpw(0x3ce,0x0000);
     init_cell_cache(); init_cube_cache(); draw_page=PAGE_BYTES; display_page=0;
     cached_level[0]=-1; cached_level[1]=-1;
+    cached_target_angle[0]=-1; cached_target_angle[1]=-1;
     clear_page(0); video_present(); clear_page(0); video_present();
     return true;
 }
@@ -761,9 +794,10 @@ void video_render_game(const GameState *game,const Motion *motion)
         text(16,16,"LEVEL",7); draw_number(50,16,game->level+1,15);
         text(16,42,game_level_name(game->level),14);
         text(16,326,"MOVES",7);
-        draw_target(game);
+        text(567,16,"TARGET",15);
         cached_level[page]=(signed char)game->level;
     }
+    update_target(game,angle,page,fresh);
     if(fresh || !dirty_roll)text(340,326,"U UNDO  R RESET",7);
     draw_number(50,326,game->moves,15);
     if(profiling) { profile.hud_ticks+=elapsed(started); ++profile.frames; }
