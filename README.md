@@ -38,7 +38,24 @@ The target is shown as a miniature isometric field and turns with the camera.
 
 ## Build and test
 
-Install GNU Make, Bash, curl, unzip, a C++ compiler, and DOSBox-X, then run:
+Install GNU Make, Bash, curl, unzip, a C++ compiler, and DOSBox-X.
+
+On macOS (with [Homebrew](https://brew.sh/)):
+
+```sh
+xcode-select --install
+brew install dosbox-x
+```
+
+On Debian/Ubuntu Linux:
+
+```sh
+sudo apt update
+sudo apt install build-essential make bash curl unzip xz-utils
+```
+
+Then install [DOSBox-X](https://dosbox-x.com/) for your distribution and ensure
+the `dosbox-x` command is on `PATH`. Build and run with:
 
 ```sh
 make
