@@ -64,6 +64,9 @@ make run
 make dist
 ```
 
+The bootstrap shares checksum-verified Watcom downloads under
+`${XDG_CACHE_HOME:-$HOME/.cache}/open-watcom`. Extracted tools stay in this checkout.
+
 The first build downloads a checksum-pinned Open Watcom v2 toolchain into
 `.tools/`, following the cross-compilation approach used by
 [Kolobok](https://github.com/ddanila/kolobok). Linux x86-64 and macOS arm64/x64
